@@ -2,9 +2,9 @@
 //!
 //! This module defines the [`Semiring`] trait and implementations for:
 //! - [`Standard<T>`]: Standard arithmetic `(+, ×)` (always available)
-//! - [`MaxPlus<T>`]: Tropical max-plus `(max, +)` (requires `tropical` feature)
-//! - [`MinPlus<T>`]: Tropical min-plus `(min, +)` (requires `tropical` feature)
-//! - [`MaxMul<T>`]: Tropical max-mul `(max, ×)` (requires `tropical` feature)
+//! - `MaxPlus<T>`: Tropical max-plus `(max, +)` (requires `tropical` feature)
+//! - `MinPlus<T>`: Tropical min-plus `(min, +)` (requires `tropical` feature)
+//! - `MaxMul<T>`: Tropical max-mul `(max, ×)` (requires `tropical` feature)
 
 mod semiring;
 mod standard;

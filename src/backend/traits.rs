@@ -119,7 +119,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
         n: usize,
     ) -> Self::Storage<A::Scalar>;
 
-    /// Batched GEMM: C[b] = A[b] @ B[b] for each batch.
+    /// Batched GEMM: `C[b] = A[b] @ B[b]` for each batch.
     ///
     /// # Arguments
     /// * `a` - Left matrices, row-major, shape [batch_size, m, k]

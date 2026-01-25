@@ -2,7 +2,7 @@
 //!
 //! This module defines the [`Backend`] trait and implementations:
 //! - [`Cpu`]: CPU backend with SIMD acceleration
-//! - [`Cuda`]: CUDA backend (optional, requires `cuda` feature)
+//! - `Cuda`: CUDA backend (optional, requires `cuda` feature)
 
 mod cpu;
 mod traits;

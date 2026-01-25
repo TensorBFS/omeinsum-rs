@@ -131,6 +131,43 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         }
     }
 
+    /// Create a tensor from storage with given shape.
+    ///
+    /// The storage must be contiguous and have exactly `shape.iter().product()` elements.
+    pub fn from_storage(storage: B::Storage<T>, shape: &[usize], backend: B) -> Self {
+        let numel: usize = shape.iter().product();
+        assert_eq!(
+            storage.len(),
+            numel,
+            "Storage length {} doesn't match shape {:?} (expected {})",
+            storage.len(),
+            shape,
+            numel
+        );
+
+        let strides = compute_contiguous_strides(shape);
+
+        Self {
+            storage: Arc::new(storage),
+            shape: shape.to_vec(),
+            strides,
+            offset: 0,
+            backend,
+        }
+    }
+
+    /// Get a reference to the underlying storage.
+    ///
+    /// Returns `Some(&storage)` only if the tensor is contiguous and has no offset.
+    /// For non-contiguous tensors, call `contiguous()` first.
+    pub fn storage(&self) -> Option<&B::Storage<T>> {
+        if self.is_contiguous() {
+            Some(self.storage.as_ref())
+        } else {
+            None
+        }
+    }
+
     // ========================================================================
     // Metadata
     // ========================================================================

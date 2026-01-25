@@ -151,15 +151,8 @@ impl Backend for Cpu {
             for i in 0..m {
                 for j in 0..n {
                     let idx = argmax[i * n + j] as usize;
-                    // Accumulate gradient (using standard addition for gradients)
-                    let current = grad_a[i * k + idx];
-                    let grad = grad_c[i * n + j];
-                    // Simple addition for gradient accumulation
-                    grad_a[i * k + idx] = unsafe {
-                        let c = std::mem::transmute_copy::<_, f64>(&current);
-                        let g = std::mem::transmute_copy::<_, f64>(&grad);
-                        std::mem::transmute_copy(&(c + g))
-                    };
+                    // Accumulate gradient using AddAssign
+                    grad_a[i * k + idx] += grad_c[i * n + j];
                 }
             }
         }
@@ -182,13 +175,8 @@ impl Backend for Cpu {
             for i in 0..m {
                 for j in 0..n {
                     let idx = argmax[i * n + j] as usize;
-                    let current = grad_b[idx * n + j];
-                    let grad = grad_c[i * n + j];
-                    grad_b[idx * n + j] = unsafe {
-                        let c = std::mem::transmute_copy::<_, f64>(&current);
-                        let g = std::mem::transmute_copy::<_, f64>(&grad);
-                        std::mem::transmute_copy(&(c + g))
-                    };
+                    // Accumulate gradient using AddAssign
+                    grad_b[idx * n + j] += grad_c[i * n + j];
                 }
             }
         }

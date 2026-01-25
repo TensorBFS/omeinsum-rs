@@ -126,6 +126,9 @@ impl Einsum<usize> {
     }
 
     /// Execute with argmax tracking for backpropagation.
+    ///
+    /// Returns `(result, argmax_cache)` where `argmax_cache` contains argmax
+    /// tensors for each binary contraction in the execution tree.
     pub fn execute_with_argmax<A, T, B>(
         &self,
         tensors: &[&Tensor<T, B>],
@@ -135,9 +138,113 @@ impl Einsum<usize> {
         T: Scalar,
         B: Backend,
     {
-        // TODO: Implement proper argmax tracking through tree execution
-        let result = self.execute::<A, T, B>(tensors);
-        (result, vec![])
+        assert_eq!(
+            tensors.len(),
+            self.ixs.len(),
+            "Number of tensors {} doesn't match number of index specs {}",
+            tensors.len(),
+            self.ixs.len()
+        );
+
+        let mut argmax_cache = Vec::new();
+
+        let result = match &self.optimized {
+            Some(tree) => self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache),
+            None => self.execute_pairwise_with_argmax::<A, T, B>(tensors, &mut argmax_cache),
+        };
+
+        (result, argmax_cache)
+    }
+
+    /// Execute an optimized contraction tree with argmax tracking.
+    fn execute_tree_with_argmax<A, T, B>(
+        &self,
+        tree: &NestedEinsum<usize>,
+        tensors: &[&Tensor<T, B>],
+        argmax_cache: &mut Vec<Tensor<u32, B>>,
+    ) -> Tensor<T, B>
+    where
+        A: Algebra<Scalar = T, Index = u32>,
+        T: Scalar,
+        B: Backend,
+    {
+        match tree {
+            NestedEinsum::Leaf { tensor_index } => tensors[*tensor_index].clone(),
+            NestedEinsum::Node { args, eins } => {
+                assert_eq!(args.len(), 2, "Expected binary contraction tree");
+
+                let left = self.execute_tree_with_argmax::<A, T, B>(&args[0], tensors, argmax_cache);
+                let right = self.execute_tree_with_argmax::<A, T, B>(&args[1], tensors, argmax_cache);
+
+                let ia = &eins.ixs[0];
+                let ib = &eins.ixs[1];
+                let iy = &eins.iy;
+
+                if A::needs_argmax() {
+                    let (result, argmax) = left.contract_binary_with_argmax::<A>(&right, ia, ib, iy);
+                    argmax_cache.push(argmax);
+                    result
+                } else {
+                    left.contract_binary::<A>(&right, ia, ib, iy)
+                }
+            }
+        }
+    }
+
+    /// Execute pairwise contraction with argmax tracking.
+    fn execute_pairwise_with_argmax<A, T, B>(
+        &self,
+        tensors: &[&Tensor<T, B>],
+        argmax_cache: &mut Vec<Tensor<u32, B>>,
+    ) -> Tensor<T, B>
+    where
+        A: Algebra<Scalar = T, Index = u32>,
+        T: Scalar,
+        B: Backend,
+    {
+        if tensors.is_empty() {
+            panic!("Cannot execute einsum with no tensors");
+        }
+
+        if tensors.len() == 1 {
+            return self.execute_unary::<A, T, B>(tensors[0], &self.ixs[0]);
+        }
+
+        // Contract left to right
+        let mut result = tensors[0].clone();
+        let mut current_indices = self.ixs[0].clone();
+
+        for i in 1..tensors.len() {
+            let other = tensors[i];
+            let other_indices = &self.ixs[i];
+
+            let intermediate_output = if i == tensors.len() - 1 {
+                self.iy.clone()
+            } else {
+                compute_intermediate_output(&current_indices, other_indices, &self.iy)
+            };
+
+            if A::needs_argmax() {
+                let (new_result, argmax) = result.contract_binary_with_argmax::<A>(
+                    other,
+                    &current_indices,
+                    other_indices,
+                    &intermediate_output,
+                );
+                argmax_cache.push(argmax);
+                result = new_result;
+            } else {
+                result = result.contract_binary::<A>(
+                    other,
+                    &current_indices,
+                    other_indices,
+                    &intermediate_output,
+                );
+            }
+            current_indices = intermediate_output;
+        }
+
+        result
     }
 
     /// Execute an optimized contraction tree.

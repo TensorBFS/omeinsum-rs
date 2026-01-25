@@ -3,6 +3,7 @@
 //! This module provides the [`Einsum`] type for specifying and executing
 //! tensor network contractions, with optional optimization via omeco.
 
+mod backward;
 mod builder;
 mod engine;
 
@@ -89,13 +90,63 @@ pub struct EinsumGradient<T: Scalar, B: Backend> {
 
 impl<T: Scalar, B: Backend> EinsumGradient<T, B> {
     /// Compute gradients for all inputs given the output gradient.
-    pub fn backward<A: Algebra<Scalar = T>>(
+    ///
+    /// # Arguments
+    ///
+    /// * `grad_output` - Gradient of the einsum output
+    /// * `inputs` - Original input tensors (same as passed to forward)
+    ///
+    /// # Returns
+    ///
+    /// Vector of gradients, one for each input tensor.
+    pub fn backward<A: Algebra<Scalar = T, Index = u32>>(
         &self,
-        _grad_output: &Tensor<T, B>,
-        _inputs: &[&Tensor<T, B>],
+        grad_output: &Tensor<T, B>,
+        inputs: &[&Tensor<T, B>],
     ) -> Vec<Tensor<T, B>> {
-        // TODO: Implement backward pass using argmax cache
-        unimplemented!("Backward pass not yet implemented")
+        assert_eq!(
+            inputs.len(),
+            self.ixs.len(),
+            "Number of inputs {} doesn't match stored indices {}",
+            inputs.len(),
+            self.ixs.len()
+        );
+
+        // For a single binary contraction (2 inputs), we can directly compute gradients
+        if inputs.len() == 2 {
+            let argmax = if A::needs_argmax() && !self.argmax_cache.is_empty() {
+                Some(&self.argmax_cache[0])
+            } else {
+                None
+            };
+
+            let (grad_a, grad_b) = backward::contract_binary_backward::<A, T, B>(
+                grad_output,
+                inputs[0],
+                inputs[1],
+                argmax,
+                &self.ixs[0],
+                &self.ixs[1],
+                &self.iy,
+            );
+
+            return vec![grad_a, grad_b];
+        }
+
+        // For more complex contractions with >2 tensors, we need to reverse through
+        // the contraction tree. This requires storing intermediate results from forward pass.
+        // For now, implement the simple case.
+        //
+        // TODO: Implement full backward pass for multi-tensor contractions
+        // This would require:
+        // 1. Storing intermediate results during forward pass
+        // 2. Reversing through the contraction tree
+        // 3. Accumulating gradients for each input
+        unimplemented!(
+            "Backward pass for {} inputs not yet implemented. \
+             Currently only 2-input contractions are supported.",
+            inputs.len()
+        )
     }
 }
 

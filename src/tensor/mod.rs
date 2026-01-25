@@ -10,7 +10,7 @@ mod view;
 
 use std::sync::Arc;
 
-use crate::algebra::Scalar;
+use crate::algebra::{Algebra, Scalar};
 use crate::backend::{Backend, Storage};
 
 pub use view::TensorView;
@@ -339,6 +339,144 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
             }
         }
     }
+
+    // ========================================================================
+    // Reduction Operations
+    // ========================================================================
+
+    /// Sum all elements using the algebra's addition.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `A` - The algebra to use for summation
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use omeinsum::{Tensor, Cpu, Standard};
+    ///
+    /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    /// let sum = t.sum::<Standard<f32>>();
+    /// assert_eq!(sum, 10.0);
+    /// ```
+    pub fn sum<A: Algebra<Scalar = T>>(&self) -> T {
+        let data = self.to_vec();
+        let mut acc = A::zero();
+        for val in data {
+            acc = acc.add(A::from_scalar(val));
+        }
+        acc.to_scalar()
+    }
+
+    /// Sum along a specific axis using the algebra's addition.
+    ///
+    /// The result has one fewer dimension than the input.
+    ///
+    /// # Arguments
+    ///
+    /// * `axis` - The axis to sum over
+    ///
+    /// # Panics
+    ///
+    /// Panics if axis is out of bounds.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use omeinsum::{Tensor, Cpu, Standard};
+    ///
+    /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    /// // Sum over axis 1 (columns): [1+2, 3+4] = [3, 7]
+    /// let result = t.sum_axis::<Standard<f32>>(1);
+    /// assert_eq!(result.to_vec(), vec![3.0, 7.0]);
+    /// ```
+    pub fn sum_axis<A: Algebra<Scalar = T>>(&self, axis: usize) -> Self
+    where
+        B: Default,
+    {
+        assert!(axis < self.ndim(), "Axis {} out of bounds for {}D tensor", axis, self.ndim());
+
+        let mut new_shape: Vec<usize> = self.shape.clone();
+        new_shape.remove(axis);
+
+        // Handle reduction to scalar
+        if new_shape.is_empty() {
+            let sum = self.sum::<A>();
+            return Self::from_data(&[sum], &[1]);
+        }
+
+        let data = self.to_vec();
+        let input_strides = compute_contiguous_strides(&self.shape);
+        let output_strides = compute_contiguous_strides(&new_shape);
+        let _axis_size = self.shape[axis];
+
+        // Compute output size
+        let output_numel: usize = new_shape.iter().product();
+        let mut result = vec![A::zero(); output_numel];
+
+        // Iterate over all elements in the input
+        for (flat_idx, &val) in data.iter().enumerate() {
+            // Convert flat index to multi-dimensional coordinates
+            let mut coords: Vec<usize> = vec![0; self.ndim()];
+            let mut remaining = flat_idx;
+            for dim in 0..self.ndim() {
+                coords[dim] = remaining / input_strides[dim];
+                remaining %= input_strides[dim];
+            }
+
+            // Build output coordinates by removing the summed axis
+            let out_coords: Vec<usize> = coords
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != axis)
+                .map(|(_, &c)| c)
+                .collect();
+
+            // Convert output coordinates to flat index
+            let mut out_flat_idx = 0;
+            for (i, &coord) in out_coords.iter().enumerate() {
+                out_flat_idx += coord * output_strides[i];
+            }
+
+            result[out_flat_idx] = result[out_flat_idx].add(A::from_scalar(val));
+        }
+
+        let result_data: Vec<T> = result.into_iter().map(|v| v.to_scalar()).collect();
+        Self::from_data(&result_data, &new_shape)
+    }
+
+    /// Extract diagonal elements from a 2D tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tensor is not 2D or not square.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use omeinsum::{Tensor, Cpu};
+    ///
+    /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    /// let diag = t.diagonal();
+    /// assert_eq!(diag.to_vec(), vec![1.0, 4.0]);
+    /// ```
+    pub fn diagonal(&self) -> Self
+    where
+        B: Default,
+    {
+        assert_eq!(self.ndim(), 2, "diagonal requires 2D tensor, got {}D", self.ndim());
+        assert_eq!(
+            self.shape[0], self.shape[1],
+            "diagonal requires square tensor, got {:?}",
+            self.shape
+        );
+
+        let n = self.shape[0];
+        let data = self.to_vec();
+        let diag: Vec<T> = (0..n).map(|i| data[i * n + i]).collect();
+
+        Self::from_data(&diag, &[n])
+    }
 }
 
 /// Compute strides for row-major (C) contiguous layout.
@@ -415,5 +553,55 @@ mod tests {
         assert!(r.is_contiguous());
         // Transposed data flattened: [[1,4],[2,5],[3,6]] -> [1,4,2,5,3,6]
         assert_eq!(r.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_sum() {
+        use crate::algebra::Standard;
+
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let sum = t.sum::<Standard<f32>>();
+        assert_eq!(sum, 10.0);
+    }
+
+    #[test]
+    fn test_sum_axis() {
+        use crate::algebra::Standard;
+
+        // Matrix: [[1, 2], [3, 4]]
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        // Sum over axis 1 (columns): [1+2, 3+4] = [3, 7]
+        let sum_cols = t.sum_axis::<Standard<f32>>(1);
+        assert_eq!(sum_cols.shape(), &[2]);
+        assert_eq!(sum_cols.to_vec(), vec![3.0, 7.0]);
+
+        // Sum over axis 0 (rows): [1+3, 2+4] = [4, 6]
+        let sum_rows = t.sum_axis::<Standard<f32>>(0);
+        assert_eq!(sum_rows.shape(), &[2]);
+        assert_eq!(sum_rows.to_vec(), vec![4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_diagonal() {
+        // Matrix: [[1, 2], [3, 4]]
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let diag = t.diagonal();
+
+        assert_eq!(diag.shape(), &[2]);
+        assert_eq!(diag.to_vec(), vec![1.0, 4.0]);
+    }
+
+    #[test]
+    fn test_diagonal_3x3() {
+        // Matrix: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        let t = Tensor::<f32, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            &[3, 3],
+        );
+        let diag = t.diagonal();
+
+        assert_eq!(diag.shape(), &[3]);
+        assert_eq!(diag.to_vec(), vec![1.0, 5.0, 9.0]);
     }
 }

@@ -1,6 +1,6 @@
 //! Einsum execution engine with omeco integration.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use omeco::{optimize_code, EinCode, GreedyMethod, Label, NestedEinsum, TreeSA};
 
@@ -109,7 +109,7 @@ impl Einsum<usize> {
     where
         A: Algebra<Scalar = T, Index = u32>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
         assert_eq!(
             tensors.len(),
@@ -136,7 +136,7 @@ impl Einsum<usize> {
     where
         A: Algebra<Scalar = T, Index = u32>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
         assert_eq!(
             tensors.len(),
@@ -166,7 +166,7 @@ impl Einsum<usize> {
     where
         A: Algebra<Scalar = T, Index = u32>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
         match tree {
             NestedEinsum::Leaf { tensor_index } => tensors[*tensor_index].clone(),
@@ -200,7 +200,7 @@ impl Einsum<usize> {
     where
         A: Algebra<Scalar = T, Index = u32>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
         if tensors.is_empty() {
             panic!("Cannot execute einsum with no tensors");
@@ -256,7 +256,7 @@ impl Einsum<usize> {
     where
         A: Algebra<Scalar = T, Index = u32>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
         match tree {
             NestedEinsum::Leaf { tensor_index } => tensors[*tensor_index].clone(),
@@ -280,7 +280,7 @@ impl Einsum<usize> {
     where
         A: Algebra<Scalar = T, Index = u32>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
         if tensors.is_empty() {
             panic!("Cannot execute einsum with no tensors");
@@ -320,15 +320,68 @@ impl Einsum<usize> {
         result
     }
 
-    /// Execute unary operation (trace/reduction).
-    fn execute_unary<A, T, B>(&self, tensor: &Tensor<T, B>, _ix: &[usize]) -> Tensor<T, B>
+    /// Execute unary operation (trace/diagonal/reduction).
+    ///
+    /// Handles:
+    /// - Trace: `A[i,i] -> scalar` - sum of diagonal elements
+    /// - Diagonal: `A[i,i] -> B[i]` - extract diagonal
+    /// - Reduction: `A[i,j] -> B[i]` - sum over j
+    fn execute_unary<A, T, B>(&self, tensor: &Tensor<T, B>, ix: &[usize]) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T>,
         T: Scalar,
-        B: Backend,
+        B: Backend + Default,
     {
-        // For now, just return the tensor
-        // TODO: Implement trace and reduction
+        // Find repeated indices (for trace/diagonal)
+        let mut index_counts: HashMap<usize, usize> = HashMap::new();
+        for &i in ix {
+            *index_counts.entry(i).or_insert(0) += 1;
+        }
+
+        let repeated: Vec<usize> = index_counts
+            .iter()
+            .filter(|(_, &count)| count > 1)
+            .map(|(&idx, _)| idx)
+            .collect();
+
+        // Find indices to sum over (in input but not in output)
+        let output_set: HashSet<_> = self.iy.iter().copied().collect();
+
+        // Handle repeated indices (trace/diagonal)
+        if !repeated.is_empty() && tensor.ndim() == 2 {
+            let diag = tensor.diagonal();
+            if self.iy.is_empty() {
+                // Trace: sum the diagonal
+                let sum = diag.sum::<A>();
+                return Tensor::from_data(&[sum], &[1]);
+            } else {
+                // Diagonal extraction
+                return diag;
+            }
+        }
+
+        // Handle reduction (sum over axes not in output)
+        // Find which axis positions need to be summed
+        let mut axes_to_sum: Vec<usize> = Vec::new();
+        for (axis, &idx) in ix.iter().enumerate() {
+            if !output_set.contains(&idx) {
+                axes_to_sum.push(axis);
+            }
+        }
+
+        if !axes_to_sum.is_empty() {
+            // Sum over axes from highest to lowest to maintain correct indexing
+            axes_to_sum.sort();
+            axes_to_sum.reverse();
+
+            let mut result = tensor.clone();
+            for axis in axes_to_sum {
+                result = result.sum_axis::<A>(axis);
+            }
+            return result;
+        }
+
+        // No operation needed, just return the tensor
         tensor.clone()
     }
 }
@@ -423,5 +476,75 @@ mod tests {
         let d = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b, &c]);
 
         assert_eq!(d.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_einsum_trace() {
+        // Trace: A[i,i] -> scalar (sum of diagonal)
+        // Matrix: [[1, 2], [3, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_einsum_diagonal() {
+        // Diagonal: A[i,i] -> B[i] (extract diagonal)
+        // Matrix: [[1, 2], [3, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![0], sizes);
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+        // diagonal = [1, 4]
+        assert_eq!(result.to_vec(), vec![1.0, 4.0]);
+    }
+
+    #[test]
+    fn test_einsum_sum_axis() {
+        // Reduction: A[i,j] -> B[i] (sum over j)
+        // Matrix: [[1, 2], [3, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 1]], vec![0], sizes);
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+        // sum over j: [1+2, 3+4] = [3, 7]
+        assert_eq!(result.to_vec(), vec![3.0, 7.0]);
+    }
+
+    #[test]
+    fn test_einsum_sum_all() {
+        // Sum all: A[i,j] -> scalar
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 1]], vec![], sizes);
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+        // sum = 1 + 2 + 3 + 4 = 10
+        assert_eq!(result.to_vec()[0], 10.0);
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_einsum_trace_tropical() {
+        // Trace with max-plus algebra: A[i,i] -> scalar
+        // Matrix: [[1, 2], [3, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a]);
+        // tropical trace = max(1, 4) = 4
+        assert_eq!(result.to_vec()[0], 4.0);
     }
 }

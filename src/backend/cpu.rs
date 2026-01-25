@@ -303,26 +303,199 @@ fn generic_gemm_with_argmax<A: Algebra<Index = u32>>(
 // Optional: Use tropical-gemm for optimized kernels
 #[cfg(feature = "tropical-kernels")]
 fn try_tropical_gemm<A: Algebra>(
-    _a: &[A::Scalar],
-    _m: usize,
-    _k: usize,
-    _b: &[A::Scalar],
-    _n: usize,
+    a: &[A::Scalar],
+    m: usize,
+    k: usize,
+    b: &[A::Scalar],
+    n: usize,
 ) -> Option<Vec<A::Scalar>> {
-    // TODO: Dispatch to tropical-gemm based on A type
-    // For now, fall back to generic
-    None
+    use std::any::TypeId;
+    use crate::algebra::{MaxPlus, MinPlus, MaxMul};
+    use tropical_gemm::{
+        tropical_matmul,
+        TropicalMaxPlus, TropicalMinPlus, TropicalMaxMul,
+        TropicalSemiring,
+    };
+
+    // Dispatch based on algebra type using TypeId
+    // The tropical-gemm types have identical repr(transparent) layout to our types,
+    // and both wrap the scalar directly, so we can safely transmute the output.
+
+    if TypeId::of::<A>() == TypeId::of::<MaxPlus<f32>>() {
+        // SAFETY: A::Scalar is f32, and MaxPlus<f32> has repr(transparent) over f32
+        let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+        let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+
+        let result: Vec<TropicalMaxPlus<f32>> = tropical_matmul::<TropicalMaxPlus<f32>>(a_f32, m, k, b_f32, n);
+
+        // Convert TropicalMaxPlus<f32> -> f32, both are repr(transparent) over f32
+        let scalars: Vec<f32> = result.into_iter().map(|x| x.value()).collect();
+
+        // SAFETY: A::Scalar is f32
+        Some(unsafe { std::mem::transmute(scalars) })
+    } else if TypeId::of::<A>() == TypeId::of::<MaxPlus<f64>>() {
+        let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+        let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+
+        let result: Vec<TropicalMaxPlus<f64>> = tropical_matmul::<TropicalMaxPlus<f64>>(a_f64, m, k, b_f64, n);
+        let scalars: Vec<f64> = result.into_iter().map(|x| x.value()).collect();
+
+        Some(unsafe { std::mem::transmute(scalars) })
+    } else if TypeId::of::<A>() == TypeId::of::<MinPlus<f32>>() {
+        let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+        let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+
+        let result: Vec<TropicalMinPlus<f32>> = tropical_matmul::<TropicalMinPlus<f32>>(a_f32, m, k, b_f32, n);
+        let scalars: Vec<f32> = result.into_iter().map(|x| x.value()).collect();
+
+        Some(unsafe { std::mem::transmute(scalars) })
+    } else if TypeId::of::<A>() == TypeId::of::<MinPlus<f64>>() {
+        let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+        let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+
+        let result: Vec<TropicalMinPlus<f64>> = tropical_matmul::<TropicalMinPlus<f64>>(a_f64, m, k, b_f64, n);
+        let scalars: Vec<f64> = result.into_iter().map(|x| x.value()).collect();
+
+        Some(unsafe { std::mem::transmute(scalars) })
+    } else if TypeId::of::<A>() == TypeId::of::<MaxMul<f32>>() {
+        let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+        let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+
+        let result: Vec<TropicalMaxMul<f32>> = tropical_matmul::<TropicalMaxMul<f32>>(a_f32, m, k, b_f32, n);
+        let scalars: Vec<f32> = result.into_iter().map(|x| x.value()).collect();
+
+        Some(unsafe { std::mem::transmute(scalars) })
+    } else if TypeId::of::<A>() == TypeId::of::<MaxMul<f64>>() {
+        let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+        let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+
+        let result: Vec<TropicalMaxMul<f64>> = tropical_matmul::<TropicalMaxMul<f64>>(a_f64, m, k, b_f64, n);
+        let scalars: Vec<f64> = result.into_iter().map(|x| x.value()).collect();
+
+        Some(unsafe { std::mem::transmute(scalars) })
+    } else {
+        // Unsupported type, fall back to generic implementation
+        None
+    }
 }
 
 #[cfg(feature = "tropical-kernels")]
-fn try_tropical_gemm_with_argmax<A: Algebra>(
-    _a: &[A::Scalar],
-    _m: usize,
-    _k: usize,
-    _b: &[A::Scalar],
-    _n: usize,
+fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
+    a: &[A::Scalar],
+    m: usize,
+    k: usize,
+    b: &[A::Scalar],
+    n: usize,
 ) -> Option<(Vec<A::Scalar>, Vec<u32>)> {
-    None
+    use std::any::TypeId;
+    use crate::algebra::{MaxPlus, MinPlus, MaxMul};
+    use tropical_gemm::{
+        tropical_matmul_with_argmax,
+        TropicalMaxPlus, TropicalMinPlus, TropicalMaxMul,
+        TropicalSemiring,
+    };
+
+    // Dispatch based on algebra type using TypeId
+    if TypeId::of::<A>() == TypeId::of::<MaxPlus<f32>>() {
+        let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+        let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+
+        let result = tropical_matmul_with_argmax::<TropicalMaxPlus<f32>>(a_f32, m, k, b_f32, n);
+
+        let mut scalars = Vec::with_capacity(m * n);
+        let mut argmax = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                scalars.push(result.get(i, j).value());
+                argmax.push(result.get_argmax(i, j));
+            }
+        }
+
+        Some((unsafe { std::mem::transmute(scalars) }, argmax))
+    } else if TypeId::of::<A>() == TypeId::of::<MaxPlus<f64>>() {
+        let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+        let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+
+        let result = tropical_matmul_with_argmax::<TropicalMaxPlus<f64>>(a_f64, m, k, b_f64, n);
+
+        let mut scalars = Vec::with_capacity(m * n);
+        let mut argmax = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                scalars.push(result.get(i, j).value());
+                argmax.push(result.get_argmax(i, j));
+            }
+        }
+
+        Some((unsafe { std::mem::transmute(scalars) }, argmax))
+    } else if TypeId::of::<A>() == TypeId::of::<MinPlus<f32>>() {
+        let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+        let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+
+        let result = tropical_matmul_with_argmax::<TropicalMinPlus<f32>>(a_f32, m, k, b_f32, n);
+
+        let mut scalars = Vec::with_capacity(m * n);
+        let mut argmax = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                scalars.push(result.get(i, j).value());
+                argmax.push(result.get_argmax(i, j));
+            }
+        }
+
+        Some((unsafe { std::mem::transmute(scalars) }, argmax))
+    } else if TypeId::of::<A>() == TypeId::of::<MinPlus<f64>>() {
+        let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+        let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+
+        let result = tropical_matmul_with_argmax::<TropicalMinPlus<f64>>(a_f64, m, k, b_f64, n);
+
+        let mut scalars = Vec::with_capacity(m * n);
+        let mut argmax = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                scalars.push(result.get(i, j).value());
+                argmax.push(result.get_argmax(i, j));
+            }
+        }
+
+        Some((unsafe { std::mem::transmute(scalars) }, argmax))
+    } else if TypeId::of::<A>() == TypeId::of::<MaxMul<f32>>() {
+        let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+        let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+
+        let result = tropical_matmul_with_argmax::<TropicalMaxMul<f32>>(a_f32, m, k, b_f32, n);
+
+        let mut scalars = Vec::with_capacity(m * n);
+        let mut argmax = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                scalars.push(result.get(i, j).value());
+                argmax.push(result.get_argmax(i, j));
+            }
+        }
+
+        Some((unsafe { std::mem::transmute(scalars) }, argmax))
+    } else if TypeId::of::<A>() == TypeId::of::<MaxMul<f64>>() {
+        let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+        let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+
+        let result = tropical_matmul_with_argmax::<TropicalMaxMul<f64>>(a_f64, m, k, b_f64, n);
+
+        let mut scalars = Vec::with_capacity(m * n);
+        let mut argmax = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                scalars.push(result.get(i, j).value());
+                argmax.push(result.get_argmax(i, j));
+            }
+        }
+
+        Some((unsafe { std::mem::transmute(scalars) }, argmax))
+    } else {
+        // Unsupported type, fall back to generic implementation
+        None
+    }
 }
 
 #[cfg(test)]
@@ -388,5 +561,119 @@ mod tests {
         // Original: [[1, 2, 3], [4, 5, 6]]
         // Transposed: [[1, 4], [2, 5], [3, 6]]
         assert_eq!(dst, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    /// Test that optimized tropical-gemm kernels produce same results as generic implementation.
+    #[cfg(feature = "tropical-kernels")]
+    #[test]
+    fn test_tropical_gemm_optimized_maxplus() {
+        use crate::algebra::MaxPlus;
+
+        let cpu = Cpu;
+        let m = 64;
+        let k = 64;
+        let n = 64;
+
+        let a: Vec<f32> = (0..m * k).map(|i| (i % 100) as f32).collect();
+        let b: Vec<f32> = (0..k * n).map(|i| (i % 100) as f32).collect();
+
+        // Test MaxPlus<f32>
+        let c_opt = cpu.gemm::<MaxPlus<f32>>(&a, m, k, &b, n);
+        let c_generic = generic_gemm::<MaxPlus<f32>>(&a, m, k, &b, n);
+
+        for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
+            assert!(
+                (opt - gen).abs() < 1e-6,
+                "MaxPlus mismatch at index {}: opt={}, gen={}",
+                i, opt, gen
+            );
+        }
+    }
+
+    #[cfg(feature = "tropical-kernels")]
+    #[test]
+    fn test_tropical_gemm_optimized_minplus() {
+        use crate::algebra::MinPlus;
+
+        let cpu = Cpu;
+        let m = 32;
+        let k = 32;
+        let n = 32;
+
+        let a: Vec<f32> = (0..m * k).map(|i| (i % 50) as f32).collect();
+        let b: Vec<f32> = (0..k * n).map(|i| (i % 50) as f32).collect();
+
+        // Test MinPlus<f32>
+        let c_opt = cpu.gemm::<MinPlus<f32>>(&a, m, k, &b, n);
+        let c_generic = generic_gemm::<MinPlus<f32>>(&a, m, k, &b, n);
+
+        for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
+            assert!(
+                (opt - gen).abs() < 1e-6,
+                "MinPlus mismatch at index {}: opt={}, gen={}",
+                i, opt, gen
+            );
+        }
+    }
+
+    #[cfg(feature = "tropical-kernels")]
+    #[test]
+    fn test_tropical_gemm_optimized_maxmul() {
+        use crate::algebra::MaxMul;
+
+        let cpu = Cpu;
+        let m = 16;
+        let k = 16;
+        let n = 16;
+
+        // Use small values to avoid overflow in multiplication
+        let a: Vec<f32> = (0..m * k).map(|i| ((i % 10) as f32) * 0.1 + 0.1).collect();
+        let b: Vec<f32> = (0..k * n).map(|i| ((i % 10) as f32) * 0.1 + 0.1).collect();
+
+        // Test MaxMul<f32>
+        let c_opt = cpu.gemm::<MaxMul<f32>>(&a, m, k, &b, n);
+        let c_generic = generic_gemm::<MaxMul<f32>>(&a, m, k, &b, n);
+
+        for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
+            assert!(
+                (opt - gen).abs() < 1e-5,
+                "MaxMul mismatch at index {}: opt={}, gen={}",
+                i, opt, gen
+            );
+        }
+    }
+
+    #[cfg(feature = "tropical-kernels")]
+    #[test]
+    fn test_tropical_gemm_with_argmax_optimized() {
+        use crate::algebra::MaxPlus;
+
+        let cpu = Cpu;
+        let m = 32;
+        let k = 32;
+        let n = 32;
+
+        let a: Vec<f32> = (0..m * k).map(|i| (i % 100) as f32).collect();
+        let b: Vec<f32> = (0..k * n).map(|i| (i % 100) as f32).collect();
+
+        // Test MaxPlus<f32> with argmax
+        let (c_opt, argmax_opt) = cpu.gemm_with_argmax::<MaxPlus<f32>>(&a, m, k, &b, n);
+        let (c_generic, argmax_generic) = generic_gemm_with_argmax::<MaxPlus<f32>>(&a, m, k, &b, n);
+
+        for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
+            assert!(
+                (opt - gen).abs() < 1e-6,
+                "MaxPlus with argmax: value mismatch at index {}: opt={}, gen={}",
+                i, opt, gen
+            );
+        }
+
+        for (i, (opt, gen)) in argmax_opt.iter().zip(argmax_generic.iter()).enumerate() {
+            assert_eq!(
+                opt, gen,
+                "MaxPlus with argmax: argmax mismatch at index {}: opt={}, gen={}",
+                i, opt, gen
+            );
+        }
     }
 }

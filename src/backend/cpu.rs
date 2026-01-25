@@ -676,4 +676,31 @@ mod tests {
             );
         }
     }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_gemm_backward() {
+        let cpu = Cpu;
+        let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // 2x3
+        let b = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // 3x2
+
+        let (_c, argmax) = cpu.gemm_with_argmax::<MaxPlus<f32>>(&a, 2, 3, &b, 2);
+
+        let grad_c = vec![1.0f32; 4];
+        let grad_a = cpu.gemm_backward_a::<MaxPlus<f32>>(&grad_c, &argmax, &b, 2, 3, 2);
+        let grad_b = cpu.gemm_backward_b::<MaxPlus<f32>>(&grad_c, &argmax, &a, 2, 3, 2);
+
+        assert_eq!(grad_a.len(), 6);
+        assert_eq!(grad_b.len(), 6);
+
+        // Verify that gradients accumulated correctly (no unsafe transmute issues)
+        // The sum of all gradients should equal the sum of all grad_c elements
+        // since each grad_c element contributes exactly once to grad_a and grad_b
+        let grad_a_sum: f32 = grad_a.iter().sum();
+        let grad_b_sum: f32 = grad_b.iter().sum();
+        let grad_c_sum: f32 = grad_c.iter().sum();
+
+        assert_eq!(grad_a_sum, grad_c_sum, "grad_a sum should equal grad_c sum");
+        assert_eq!(grad_b_sum, grad_c_sum, "grad_b sum should equal grad_c sum");
+    }
 }

@@ -70,7 +70,7 @@ impl Backend for Cpu {
 
         // Iterate over all indices and copy
         let mut indices = vec![0usize; shape.len()];
-        for flat_idx in 0..numel {
+        for dst_elem in dst.iter_mut() {
             // Compute source offset using strides
             let src_offset: usize = offset
                 + indices
@@ -79,7 +79,7 @@ impl Backend for Cpu {
                     .map(|(i, s)| i * s)
                     .sum::<usize>();
 
-            dst[flat_idx] = src[src_offset];
+            *dst_elem = src[src_offset];
 
             // Increment indices (row-major order)
             for dim in (0..shape.len()).rev() {

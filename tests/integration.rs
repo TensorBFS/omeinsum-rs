@@ -68,10 +68,7 @@ fn test_matmul_rectangular() {
 #[test]
 fn test_tensor_contraction_3d() {
     // A[i,j,k] x B[k,l] -> C[i,j,l]
-    let a = Tensor::<f32, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
+    let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
     let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
     let c = einsum::<Standard<f32>, _, _>(&[&a, &b], &[&[0, 1, 2], &[2, 3]], &[0, 1, 3]);
@@ -89,14 +86,8 @@ fn test_tensor_contraction_3d() {
 #[test]
 fn test_batch_matmul() {
     // Batch matmul: A[b,i,j] x B[b,j,k] -> C[b,i,k]
-    let a = Tensor::<f32, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
-    let b = Tensor::<f32, Cpu>::from_data(
-        &[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0],
-        &[2, 2, 2],
-    );
+    let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f32, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
 
     let c = einsum::<Standard<f32>, _, _>(&[&a, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3]);
 
@@ -111,14 +102,8 @@ fn test_batch_matmul() {
 #[test]
 fn test_einsum_with_different_contraction_axes() {
     // A[i,j,k] x B[j,k,l] -> C[i,l] (contract over two axes)
-    let a = Tensor::<f32, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
-    let b = Tensor::<f32, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
+    let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
 
     let c = einsum::<Standard<f32>, _, _>(&[&a, &b], &[&[0, 1, 2], &[1, 2, 3]], &[0, 3]);
 

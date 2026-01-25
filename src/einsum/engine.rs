@@ -157,6 +157,7 @@ impl Einsum<usize> {
     }
 
     /// Execute an optimized contraction tree with argmax tracking.
+    #[allow(clippy::only_used_in_recursion)]
     fn execute_tree_with_argmax<A, T, B>(
         &self,
         tree: &NestedEinsum<usize>,
@@ -248,6 +249,7 @@ impl Einsum<usize> {
     }
 
     /// Execute an optimized contraction tree.
+    #[allow(clippy::only_used_in_recursion)]
     fn execute_tree<A, T, B>(
         &self,
         tree: &NestedEinsum<usize>,
@@ -400,18 +402,14 @@ fn compute_intermediate_output(
     let mut output = Vec::new();
 
     for &i in ia {
-        if final_set.contains(&i) || !ib_set.contains(&i) {
-            if !output.contains(&i) {
-                output.push(i);
-            }
+        if (final_set.contains(&i) || !ib_set.contains(&i)) && !output.contains(&i) {
+            output.push(i);
         }
     }
 
     for &i in ib {
-        if final_set.contains(&i) || !ia_set.contains(&i) {
-            if !output.contains(&i) {
-                output.push(i);
-            }
+        if (final_set.contains(&i) || !ia_set.contains(&i)) && !output.contains(&i) {
+            output.push(i);
         }
     }
 

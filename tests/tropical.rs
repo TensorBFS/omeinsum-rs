@@ -113,8 +113,7 @@ fn test_tropical_einsum_chain() {
     let c = Tensor::<f32, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
 
     // A @ B @ C in MaxPlus
-    let result =
-        einsum::<MaxPlus<f32>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let result = einsum::<MaxPlus<f32>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
 
     assert_eq!(result.shape(), &[2, 2]);
     // The result should be computed correctly via the contraction tree

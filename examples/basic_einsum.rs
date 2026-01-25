@@ -56,7 +56,11 @@ fn main() {
     // Example 5: Tensor permutation (transpose)
     println!("5. Tensor Permutation (Zero-Copy)");
     let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
-    println!("   Original shape: {:?}, contiguous: {}", t.shape(), t.is_contiguous());
+    println!(
+        "   Original shape: {:?}, contiguous: {}",
+        t.shape(),
+        t.is_contiguous()
+    );
 
     let t_transposed = t.permute(&[1, 0]);
     println!(

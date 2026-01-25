@@ -47,6 +47,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
     fn alloc<T: Scalar>(&self, len: usize) -> Self::Storage<T>;
 
     /// Create storage from slice.
+    #[allow(clippy::wrong_self_convention)]
     fn from_slice<T: Scalar>(&self, data: &[T]) -> Self::Storage<T>;
 
     /// Copy strided data to contiguous storage.

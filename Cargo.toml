@@ -1,0 +1,44 @@
+[package]
+name = "omeinsum"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jinguo Liu <cacate0129@gmail.com>"]
+description = "High-performance Einstein summation with tropical and standard algebra support"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/TensorBFS/omeinsum-rs"
+keywords = ["einsum", "tensor", "tropical", "autodiff", "contraction"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+# Core
+num-traits = "0.2"
+bytemuck = { version = "1.14", features = ["derive"] }
+
+# Contraction order optimization
+omeco = "0.2"
+
+# Optional: CUDA support
+tropical-gemm = { path = "../tropical-gemm/crates/tropical-gemm", optional = true }
+tropical-gemm-cuda = { path = "../tropical-gemm/crates/tropical-gemm-cuda", optional = true }
+cudarc = { version = "0.12", optional = true }
+
+# Optional: Parallelism
+rayon = { version = "1.8", optional = true }
+
+[dev-dependencies]
+rand = "0.8"
+approx = "0.5"
+
+[features]
+default = ["parallel", "tropical-kernels"]
+parallel = ["rayon"]
+tropical-kernels = ["tropical-gemm"]
+cuda = ["tropical-gemm-cuda", "cudarc", "tropical-kernels"]
+
+[[example]]
+name = "basic_einsum"
+path = "examples/basic_einsum.rs"
+
+[[example]]
+name = "tropical_network"
+path = "examples/tropical_network.rs"

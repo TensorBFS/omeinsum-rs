@@ -1,0 +1,382 @@
+//! Stride-based tensor type with zero-copy views.
+//!
+//! The [`Tensor`] type supports:
+//! - Zero-copy `permute` and `reshape` operations
+//! - Automatic contiguous copy when needed for GEMM
+//! - Generic over algebra and backend
+
+mod ops;
+mod view;
+
+use std::sync::Arc;
+
+use crate::algebra::Scalar;
+use crate::backend::{Backend, Storage};
+
+pub use view::TensorView;
+
+/// A multi-dimensional tensor with stride-based layout.
+///
+/// Tensors support zero-copy view operations (permute, reshape) and
+/// automatically make data contiguous when needed for operations like GEMM.
+///
+/// # Type Parameters
+///
+/// * `T` - The scalar element type (f32, f64, etc.)
+/// * `B` - The backend type (Cpu, Cuda)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use omeinsum::{Tensor, Cpu};
+///
+/// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+/// let b = a.permute(&[1, 0]);  // Zero-copy transpose
+/// let c = b.contiguous();      // Make contiguous copy
+/// ```
+#[derive(Clone)]
+pub struct Tensor<T: Scalar, B: Backend> {
+    /// Shared storage (reference counted)
+    storage: Arc<B::Storage<T>>,
+
+    /// Shape of this view
+    shape: Vec<usize>,
+
+    /// Strides for each dimension (in elements)
+    strides: Vec<usize>,
+
+    /// Offset into storage
+    offset: usize,
+
+    /// Backend instance
+    backend: B,
+}
+
+impl<T: Scalar, B: Backend> Tensor<T, B> {
+    // ========================================================================
+    // Constructors
+    // ========================================================================
+
+    /// Create a tensor from data with the given shape.
+    ///
+    /// Data is assumed to be in row-major (C) order.
+    pub fn from_data(data: &[T], shape: &[usize]) -> Self
+    where
+        B: Default,
+    {
+        Self::from_data_with_backend(data, shape, B::default())
+    }
+
+    /// Create a tensor from data with explicit backend.
+    pub fn from_data_with_backend(data: &[T], shape: &[usize], backend: B) -> Self {
+        let numel: usize = shape.iter().product();
+        assert_eq!(
+            data.len(),
+            numel,
+            "Data length {} doesn't match shape {:?} (expected {})",
+            data.len(),
+            shape,
+            numel
+        );
+
+        let storage = backend.from_slice(data);
+        let strides = compute_contiguous_strides(shape);
+
+        Self {
+            storage: Arc::new(storage),
+            shape: shape.to_vec(),
+            strides,
+            offset: 0,
+            backend,
+        }
+    }
+
+    /// Create a zero-filled tensor.
+    pub fn zeros(shape: &[usize]) -> Self
+    where
+        B: Default,
+    {
+        Self::zeros_with_backend(shape, B::default())
+    }
+
+    /// Create a zero-filled tensor with explicit backend.
+    pub fn zeros_with_backend(shape: &[usize], backend: B) -> Self {
+        let numel: usize = shape.iter().product();
+        let storage = backend.alloc(numel);
+        let strides = compute_contiguous_strides(shape);
+
+        Self {
+            storage: Arc::new(storage),
+            shape: shape.to_vec(),
+            strides,
+            offset: 0,
+            backend,
+        }
+    }
+
+    /// Create from raw storage (internal use).
+    pub(crate) fn from_raw(
+        storage: B::Storage<T>,
+        shape: Vec<usize>,
+        strides: Vec<usize>,
+        offset: usize,
+        backend: B,
+    ) -> Self {
+        Self {
+            storage: Arc::new(storage),
+            shape,
+            strides,
+            offset,
+            backend,
+        }
+    }
+
+    // ========================================================================
+    // Metadata
+    // ========================================================================
+
+    /// Get the shape of the tensor.
+    #[inline]
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// Get the strides of the tensor.
+    #[inline]
+    pub fn strides(&self) -> &[usize] {
+        &self.strides
+    }
+
+    /// Get the number of dimensions.
+    #[inline]
+    pub fn ndim(&self) -> usize {
+        self.shape.len()
+    }
+
+    /// Get the total number of elements.
+    #[inline]
+    pub fn numel(&self) -> usize {
+        self.shape.iter().product()
+    }
+
+    /// Get the backend.
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    /// Check if the tensor is contiguous in memory (row-major).
+    pub fn is_contiguous(&self) -> bool {
+        if self.offset != 0 {
+            return false;
+        }
+        let expected = compute_contiguous_strides(&self.shape);
+        self.strides == expected
+    }
+
+    // ========================================================================
+    // Data Access
+    // ========================================================================
+
+    /// Copy all data to a Vec.
+    pub fn to_vec(&self) -> Vec<T> {
+        if self.is_contiguous() {
+            self.storage.to_vec()
+        } else {
+            self.contiguous().storage.to_vec()
+        }
+    }
+
+    /// Get underlying storage (only if contiguous).
+    pub fn as_slice(&self) -> Option<&[T]>
+    where
+        B::Storage<T>: AsRef<[T]>,
+    {
+        if self.is_contiguous() {
+            Some(self.storage.as_ref().as_ref())
+        } else {
+            None
+        }
+    }
+
+    // ========================================================================
+    // View Operations (zero-copy)
+    // ========================================================================
+
+    /// Permute dimensions (zero-copy).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 3, 4]);
+    /// let b = a.permute(&[2, 0, 1]);  // Shape becomes [4, 2, 3]
+    /// ```
+    pub fn permute(&self, axes: &[usize]) -> Self {
+        assert_eq!(
+            axes.len(),
+            self.ndim(),
+            "Permutation axes length {} doesn't match ndim {}",
+            axes.len(),
+            self.ndim()
+        );
+
+        // Check axes are valid and unique
+        let mut seen = vec![false; self.ndim()];
+        for &ax in axes {
+            assert!(ax < self.ndim(), "Axis {} out of range for ndim {}", ax, self.ndim());
+            assert!(!seen[ax], "Duplicate axis {} in permutation", ax);
+            seen[ax] = true;
+        }
+
+        let new_shape: Vec<usize> = axes.iter().map(|&i| self.shape[i]).collect();
+        let new_strides: Vec<usize> = axes.iter().map(|&i| self.strides[i]).collect();
+
+        Self {
+            storage: Arc::clone(&self.storage),
+            shape: new_shape,
+            strides: new_strides,
+            offset: self.offset,
+            backend: self.backend.clone(),
+        }
+    }
+
+    /// Transpose (2D shorthand for permute).
+    pub fn t(&self) -> Self {
+        assert_eq!(self.ndim(), 2, "transpose requires 2D tensor, got {}D", self.ndim());
+        self.permute(&[1, 0])
+    }
+
+    /// Reshape to a new shape (zero-copy if contiguous).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 3]);
+    /// let b = a.reshape(&[6]);      // Flatten
+    /// let c = a.reshape(&[3, 2]);   // Different shape, same data
+    /// ```
+    pub fn reshape(&self, new_shape: &[usize]) -> Self {
+        let old_numel: usize = self.shape.iter().product();
+        let new_numel: usize = new_shape.iter().product();
+        assert_eq!(
+            old_numel, new_numel,
+            "Cannot reshape from {:?} ({} elements) to {:?} ({} elements)",
+            self.shape, old_numel, new_shape, new_numel
+        );
+
+        if self.is_contiguous() {
+            // Fast path: just update shape and strides
+            Self {
+                storage: Arc::clone(&self.storage),
+                shape: new_shape.to_vec(),
+                strides: compute_contiguous_strides(new_shape),
+                offset: self.offset,
+                backend: self.backend.clone(),
+            }
+        } else {
+            // Must make contiguous first
+            self.contiguous().reshape(new_shape)
+        }
+    }
+
+    /// Make tensor contiguous in memory.
+    ///
+    /// If already contiguous, returns a clone (shared storage).
+    /// Otherwise, copies data to a new contiguous buffer.
+    pub fn contiguous(&self) -> Self {
+        if self.is_contiguous() {
+            self.clone()
+        } else {
+            let storage = self.backend.copy_strided(
+                &self.storage,
+                &self.shape,
+                &self.strides,
+                self.offset,
+            );
+            Self {
+                storage: Arc::new(storage),
+                shape: self.shape.clone(),
+                strides: compute_contiguous_strides(&self.shape),
+                offset: 0,
+                backend: self.backend.clone(),
+            }
+        }
+    }
+}
+
+/// Compute strides for row-major (C) contiguous layout.
+pub fn compute_contiguous_strides(shape: &[usize]) -> Vec<usize> {
+    if shape.is_empty() {
+        return vec![];
+    }
+
+    let mut strides = vec![1; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+    strides
+}
+
+impl<T: Scalar, B: Backend> std::fmt::Debug for Tensor<T, B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tensor")
+            .field("shape", &self.shape)
+            .field("strides", &self.strides)
+            .field("offset", &self.offset)
+            .field("contiguous", &self.is_contiguous())
+            .field("backend", &B::name())
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Cpu;
+
+    #[test]
+    fn test_tensor_creation() {
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        assert_eq!(t.shape(), &[2, 3]);
+        assert_eq!(t.strides(), &[3, 1]);
+        assert!(t.is_contiguous());
+        assert_eq!(t.numel(), 6);
+    }
+
+    #[test]
+    fn test_permute() {
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let p = t.permute(&[1, 0]);
+
+        assert_eq!(p.shape(), &[3, 2]);
+        assert_eq!(p.strides(), &[1, 3]);
+        assert!(!p.is_contiguous());
+
+        // After making contiguous, data should be transposed
+        let c = p.contiguous();
+        assert!(c.is_contiguous());
+        assert_eq!(c.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_reshape() {
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let r = t.reshape(&[3, 2]);
+
+        assert_eq!(r.shape(), &[3, 2]);
+        assert!(r.is_contiguous());
+        assert_eq!(r.to_vec(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_permute_then_reshape() {
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let p = t.permute(&[1, 0]); // [3, 2], non-contiguous
+        let r = p.reshape(&[6]); // Must make contiguous first
+
+        assert_eq!(r.shape(), &[6]);
+        assert!(r.is_contiguous());
+        // Transposed data flattened: [[1,4],[2,5],[3,6]] -> [1,4,2,5,3,6]
+        assert_eq!(r.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+}

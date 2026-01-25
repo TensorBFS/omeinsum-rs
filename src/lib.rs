@@ -1,0 +1,69 @@
+//! # OMEinsum-rs
+//!
+//! High-performance Einstein summation with support for both tropical and standard algebras.
+//!
+//! ## Features
+//!
+//! - **Algebra-agnostic**: Works with standard arithmetic `(+, ×)` and tropical semirings `(max, +)`, `(min, +)`
+//! - **Optimized contraction**: Integration with [omeco](https://github.com/GiggleLiu/omeco) for contraction order optimization
+//! - **Backpropagation**: Gradient computation for both tropical and standard operations
+//! - **Zero-copy views**: Stride-based tensor with efficient permute/reshape
+//! - **CPU + CUDA**: Support for both backends (CUDA optional)
+//!
+//! ## Quick Start
+//!
+//! ```rust,ignore
+//! use omeinsum::{Tensor, Einsum, einsum};
+//! use omeinsum::algebra::{Standard, MaxPlus};
+//! use omeinsum::backend::Cpu;
+//!
+//! // Standard matrix multiplication
+//! let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+//! let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+//!
+//! // C[i,k] = Σ_j A[i,j] × B[j,k]
+//! let c = einsum::<Standard<f32>>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+//!
+//! // Tropical (max-plus) matrix multiplication
+//! // C[i,k] = max_j (A[i,j] + B[j,k])
+//! let c_tropical = einsum::<MaxPlus<f32>>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+//! ```
+//!
+//! ## Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                         User API                            │
+//! │   einsum(tensors, ixs, iy) → Tensor                        │
+//! │   Einsum::new(ixs, iy).optimize().execute(tensors)         │
+//! └─────────────────────────────────────────────────────────────┘
+//!                               │
+//!                               ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      Einsum Engine                          │
+//! │   omeco::optimize_code() → NestedEinsum (contraction tree) │
+//! │   Execute tree via binary contractions                      │
+//! └─────────────────────────────────────────────────────────────┘
+//!                               │
+//!                               ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                 Algebra<T> dispatch                         │
+//! │   Standard<T>: (+, ×) → BLAS/loops                         │
+//! │   MaxPlus<T>:  (max, +) → tropical-gemm                    │
+//! │   MinPlus<T>:  (min, +) → tropical-gemm                    │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+
+pub mod algebra;
+pub mod backend;
+pub mod einsum;
+pub mod tensor;
+
+// Re-exports
+pub use algebra::{Algebra, MaxMul, MaxPlus, MinPlus, Semiring, Standard};
+pub use backend::{Backend, Cpu};
+pub use einsum::{einsum, einsum_with_grad, Einsum, EinBuilder};
+pub use tensor::{Tensor, TensorView};
+
+#[cfg(feature = "cuda")]
+pub use backend::Cuda;

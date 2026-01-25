@@ -1,0 +1,120 @@
+//! Backend trait definitions.
+
+use crate::algebra::{Algebra, Scalar};
+
+/// Storage trait for tensor data.
+///
+/// Abstracts over different storage backends (CPU memory, GPU memory).
+pub trait Storage<T: Scalar>: Clone + Send + Sync + Sized {
+    /// Number of elements in storage.
+    fn len(&self) -> usize;
+
+    /// Check if storage is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Get element at index (may be slow for GPU).
+    fn get(&self, index: usize) -> T;
+
+    /// Set element at index (may be slow for GPU).
+    fn set(&mut self, index: usize, value: T);
+
+    /// Copy all data to a Vec (downloads from GPU if needed).
+    fn to_vec(&self) -> Vec<T>;
+
+    /// Create storage from slice.
+    fn from_slice(data: &[T]) -> Self;
+
+    /// Create zero-initialized storage.
+    fn zeros(len: usize) -> Self;
+}
+
+/// Backend trait for tensor execution.
+///
+/// Defines how tensor operations are executed on different hardware.
+pub trait Backend: Clone + Send + Sync + 'static {
+    /// Storage type for this backend.
+    type Storage<T: Scalar>: Storage<T>;
+
+    /// Backend name for debugging.
+    fn name() -> &'static str;
+
+    /// Synchronize all pending operations.
+    fn synchronize(&self);
+
+    /// Allocate storage.
+    fn alloc<T: Scalar>(&self, len: usize) -> Self::Storage<T>;
+
+    /// Create storage from slice.
+    fn from_slice<T: Scalar>(&self, data: &[T]) -> Self::Storage<T>;
+
+    /// Copy strided data to contiguous storage.
+    ///
+    /// This is the core operation for making non-contiguous tensors contiguous.
+    fn copy_strided<T: Scalar>(
+        &self,
+        src: &Self::Storage<T>,
+        shape: &[usize],
+        strides: &[usize],
+        offset: usize,
+    ) -> Self::Storage<T>;
+
+    /// General matrix multiplication.
+    ///
+    /// Computes C = A ⊗ B where ⊗ is the semiring multiplication
+    /// and the reduction uses semiring addition.
+    ///
+    /// # Arguments
+    /// * `a` - Left matrix, row-major, shape [m, k]
+    /// * `b` - Right matrix, row-major, shape [k, n]
+    /// * `m`, `k`, `n` - Matrix dimensions
+    ///
+    /// # Returns
+    /// Result matrix C, row-major, shape [m, n]
+    fn gemm<A: Algebra>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        m: usize,
+        k: usize,
+        b: &Self::Storage<A::Scalar>,
+        n: usize,
+    ) -> Self::Storage<A::Scalar>;
+
+    /// GEMM with argmax tracking for tropical backpropagation.
+    ///
+    /// Returns (result, argmax) where argmax[i, j] is the k index
+    /// that "won" the reduction for element [i, j].
+    fn gemm_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        m: usize,
+        k: usize,
+        b: &Self::Storage<A::Scalar>,
+        n: usize,
+    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>);
+
+    /// Backward pass for GEMM w.r.t. A.
+    ///
+    /// Given dC (gradient of output), computes dA (gradient of A).
+    fn gemm_backward_a<A: Algebra>(
+        &self,
+        grad_c: &Self::Storage<A::Scalar>,
+        argmax: &Self::Storage<u32>,
+        b: &Self::Storage<A::Scalar>,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Self::Storage<A::Scalar>;
+
+    /// Backward pass for GEMM w.r.t. B.
+    fn gemm_backward_b<A: Algebra>(
+        &self,
+        grad_c: &Self::Storage<A::Scalar>,
+        argmax: &Self::Storage<u32>,
+        a: &Self::Storage<A::Scalar>,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Self::Storage<A::Scalar>;
+}

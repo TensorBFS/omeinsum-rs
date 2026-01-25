@@ -183,6 +183,68 @@ impl Backend for Cpu {
 
         grad_b
     }
+
+    fn gemm_batched<A: Algebra>(
+        &self,
+        a: &Vec<A::Scalar>,
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        b: &Vec<A::Scalar>,
+        n: usize,
+    ) -> Vec<A::Scalar> {
+        let a_batch_stride = m * k;
+        let b_batch_stride = k * n;
+        let c_batch_stride = m * n;
+
+        let mut c = vec![A::zero().to_scalar(); batch_size * m * n];
+
+        for batch in 0..batch_size {
+            let a_offset = batch * a_batch_stride;
+            let b_offset = batch * b_batch_stride;
+            let c_offset = batch * c_batch_stride;
+
+            let a_slice = &a[a_offset..a_offset + a_batch_stride];
+            let b_slice = &b[b_offset..b_offset + b_batch_stride];
+
+            let c_batch = generic_gemm::<A>(a_slice, m, k, b_slice, n);
+            c[c_offset..c_offset + c_batch_stride].copy_from_slice(&c_batch);
+        }
+
+        c
+    }
+
+    fn gemm_batched_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        a: &Vec<A::Scalar>,
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        b: &Vec<A::Scalar>,
+        n: usize,
+    ) -> (Vec<A::Scalar>, Vec<u32>) {
+        let a_batch_stride = m * k;
+        let b_batch_stride = k * n;
+        let c_batch_stride = m * n;
+
+        let mut c = vec![A::zero().to_scalar(); batch_size * m * n];
+        let mut argmax = vec![0u32; batch_size * m * n];
+
+        for batch in 0..batch_size {
+            let a_offset = batch * a_batch_stride;
+            let b_offset = batch * b_batch_stride;
+            let c_offset = batch * c_batch_stride;
+
+            let a_slice = &a[a_offset..a_offset + a_batch_stride];
+            let b_slice = &b[b_offset..b_offset + b_batch_stride];
+
+            let (c_batch, argmax_batch) = generic_gemm_with_argmax::<A>(a_slice, m, k, b_slice, n);
+            c[c_offset..c_offset + c_batch_stride].copy_from_slice(&c_batch);
+            argmax[c_offset..c_offset + c_batch_stride].copy_from_slice(&argmax_batch);
+        }
+
+        (c, argmax)
+    }
 }
 
 /// Generic GEMM using semiring operations.

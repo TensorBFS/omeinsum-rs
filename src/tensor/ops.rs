@@ -203,9 +203,59 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
                 (a_matrix.gemm::<A>(&b_for_gemm), None)
             }
         } else {
-            // Batched case - for now, loop over batches
-            // TODO: Implement proper batched GEMM
-            unimplemented!("Batched contraction not yet implemented")
+            // Batched case: use batched GEMM
+            // A is [batch_size * left_size, contract_size], need [batch_size, left_size, contract_size]
+            // B is [batch_size * contract_size, right_size], need [batch_size, contract_size, right_size]
+            let a_batched = a_permuted.reshape(&[batch_size, left_size, contract_size]).contiguous();
+            let b_batched = b_permuted.reshape(&[batch_size, contract_size, right_size]).contiguous();
+
+            if track_argmax {
+                let (c_storage, argmax_storage) = self.backend.gemm_batched_with_argmax::<A>(
+                    &a_batched.storage,
+                    batch_size,
+                    left_size,
+                    contract_size,
+                    &b_batched.storage,
+                    right_size,
+                );
+
+                let c = Self::from_raw(
+                    c_storage,
+                    vec![batch_size, left_size, right_size],
+                    compute_contiguous_strides(&[batch_size, left_size, right_size]),
+                    0,
+                    self.backend.clone(),
+                );
+
+                let argmax = Tensor::<u32, B>::from_raw(
+                    argmax_storage,
+                    vec![batch_size, left_size, right_size],
+                    compute_contiguous_strides(&[batch_size, left_size, right_size]),
+                    0,
+                    self.backend.clone(),
+                );
+
+                (c, Some(argmax))
+            } else {
+                let c_storage = self.backend.gemm_batched::<A>(
+                    &a_batched.storage,
+                    batch_size,
+                    left_size,
+                    contract_size,
+                    &b_batched.storage,
+                    right_size,
+                );
+
+                let c = Self::from_raw(
+                    c_storage,
+                    vec![batch_size, left_size, right_size],
+                    compute_contiguous_strides(&[batch_size, left_size, right_size]),
+                    0,
+                    self.backend.clone(),
+                );
+
+                (c, None)
+            }
         };
 
         // Compute output shape
@@ -357,5 +407,26 @@ mod tests {
         assert_eq!(left, vec![0]);
         assert_eq!(right, vec![3]);
         assert_eq!(contracted, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_contract_binary_batched() {
+        // A[b,i,j] × B[b,j,k] → C[b,i,k]
+        // 2 batches, 2x2 matrices
+        let a = Tensor::<f32, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[2, 2, 2],
+        );
+        let b = Tensor::<f32, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 0.0, 1.0],
+            &[2, 2, 2],
+        );
+
+        let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3]);
+
+        assert_eq!(c.shape(), &[2, 2, 2]);
+        // Batch 0: [[1,2],[3,4]] @ [[1,2],[3,4]] = [[7,10],[15,22]]
+        // Batch 1: [[5,6],[7,8]] @ [[1,0],[0,1]] = [[5,6],[7,8]]
+        assert_eq!(c.to_vec(), vec![7.0, 10.0, 15.0, 22.0, 5.0, 6.0, 7.0, 8.0]);
     }
 }

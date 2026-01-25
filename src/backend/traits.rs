@@ -117,4 +117,38 @@ pub trait Backend: Clone + Send + Sync + 'static {
         k: usize,
         n: usize,
     ) -> Self::Storage<A::Scalar>;
+
+    /// Batched GEMM: C[b] = A[b] @ B[b] for each batch.
+    ///
+    /// # Arguments
+    /// * `a` - Left matrices, row-major, shape [batch_size, m, k]
+    /// * `b` - Right matrices, row-major, shape [batch_size, k, n]
+    /// * `batch_size` - Number of batches
+    /// * `m`, `k`, `n` - Matrix dimensions
+    ///
+    /// # Returns
+    /// Result matrices C, row-major, shape [batch_size, m, n]
+    fn gemm_batched<A: Algebra>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        b: &Self::Storage<A::Scalar>,
+        n: usize,
+    ) -> Self::Storage<A::Scalar>;
+
+    /// Batched GEMM with argmax tracking.
+    ///
+    /// Returns (result, argmax) where argmax[b, i, j] is the k index
+    /// that "won" the reduction for element [b, i, j].
+    fn gemm_batched_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        b: &Self::Storage<A::Scalar>,
+        n: usize,
+    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>);
 }

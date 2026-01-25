@@ -1,0 +1,64 @@
+name: Docs
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Install mdBook
+      - name: Install mdBook
+        run: cargo install mdbook --no-default-features --features search
+
+      # Build Rust API docs
+      - name: Build Rust docs
+        run: cargo doc --no-deps --workspace
+
+      # Build mdBook
+      - name: Build mdBook
+        run: mdbook build docs/
+
+      # Assemble public directory
+      - name: Assemble docs
+        run: |
+          mkdir -p public
+          # mdBook as main site
+          cp -r docs/book/* public/
+          # Rust API docs under /api/
+          mkdir -p public/api
+          cp -r target/doc/* public/api/
+          # Redirect /api/ to omeinsum
+          echo '<meta http-equiv="refresh" content="0; url=omeinsum/index.html">' > public/api/index.html
+          touch public/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    name: Deploy Docs
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,15 @@
+# Tarpaulin coverage configuration
+#
+# Run with: cargo tarpaulin
+# Or: make coverage
+
+[default]
+# Use LLVM engine for better inline function coverage
+engine = "Llvm"
+
+# Run for whole workspace
+workspace = true
+
+# Skip lines in panic/assert format strings and debug_assert blocks
+# These are defensive code that only runs on programmer error
+ignore-panics = true

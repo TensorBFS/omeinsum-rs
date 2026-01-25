@@ -19,6 +19,15 @@ Thumbs.db
 *.dll
 *.a
 
+# Coverage
+/coverage/
+tarpaulin-report.html
+cobertura.xml
+*.profraw
+
+# Documentation
+/docs/book/
+
 # Python (if bindings are added)
 __pycache__/
 *.py[cod]

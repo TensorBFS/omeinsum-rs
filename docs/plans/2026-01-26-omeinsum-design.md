@@ -309,4 +309,3 @@ let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &tensors);
 - [OMEinsum.jl](https://github.com/under-Peter/OMEinsum.jl) - Julia reference
 - [omeco](https://github.com/GiggleLiu/omeco) - Contraction order optimization
 - [tropical-gemm](https://github.com/TensorBFS/tropical-gemm) - Optimized tropical kernels
-- [opt_einsum](https://github.com/dgasmith/opt_einsum) - Python einsum optimization

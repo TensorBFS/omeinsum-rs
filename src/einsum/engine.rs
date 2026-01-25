@@ -261,8 +261,11 @@ fn compute_intermediate_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algebra::{MaxPlus, Standard};
+    use crate::algebra::Standard;
     use crate::backend::Cpu;
+
+    #[cfg(feature = "tropical")]
+    use crate::algebra::MaxPlus;
 
     #[test]
     fn test_einsum_matmul() {
@@ -282,6 +285,7 @@ mod tests {
         assert_eq!(c2.to_vec(), vec![7.0, 10.0, 15.0, 22.0]);
     }
 
+    #[cfg(feature = "tropical")]
     #[test]
     fn test_einsum_tropical() {
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);

@@ -278,7 +278,10 @@ fn try_tropical_gemm_with_argmax<A: Algebra>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algebra::{MaxPlus, Standard};
+    use crate::algebra::Standard;
+
+    #[cfg(feature = "tropical")]
+    use crate::algebra::MaxPlus;
 
     #[test]
     fn test_cpu_gemm_standard() {
@@ -293,6 +296,7 @@ mod tests {
         assert_eq!(c, vec![7.0, 10.0, 15.0, 22.0]);
     }
 
+    #[cfg(feature = "tropical")]
     #[test]
     fn test_cpu_gemm_maxplus() {
         let cpu = Cpu;
@@ -309,6 +313,7 @@ mod tests {
         assert_eq!(c, vec![5.0, 6.0, 7.0, 8.0]);
     }
 
+    #[cfg(feature = "tropical")]
     #[test]
     fn test_cpu_gemm_with_argmax() {
         let cpu = Cpu;

@@ -307,8 +307,11 @@ fn compute_permutation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algebra::{MaxPlus, Standard};
+    use crate::algebra::Standard;
     use crate::backend::Cpu;
+
+    #[cfg(feature = "tropical")]
+    use crate::algebra::MaxPlus;
 
     #[test]
     fn test_gemm_standard() {
@@ -321,6 +324,7 @@ mod tests {
         assert_eq!(c.to_vec(), vec![7.0, 10.0, 15.0, 22.0]);
     }
 
+    #[cfg(feature = "tropical")]
     #[test]
     fn test_gemm_maxplus() {
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);

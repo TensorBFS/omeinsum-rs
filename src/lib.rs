@@ -60,10 +60,13 @@ pub mod einsum;
 pub mod tensor;
 
 // Re-exports
-pub use algebra::{Algebra, MaxMul, MaxPlus, MinPlus, Semiring, Standard};
+pub use algebra::{Algebra, Semiring, Standard};
 pub use backend::{Backend, Cpu};
 pub use einsum::{einsum, einsum_with_grad, Einsum, EinBuilder};
 pub use tensor::{Tensor, TensorView};
+
+#[cfg(feature = "tropical")]
+pub use algebra::{MaxMul, MaxPlus, MinPlus};
 
 #[cfg(feature = "cuda")]
 pub use backend::Cuda;

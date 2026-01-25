@@ -17,8 +17,10 @@ bytemuck = { version = "1.14", features = ["derive"] }
 # Contraction order optimization
 omeco = "0.2"
 
-# Optional: CUDA support
+# Optional: Tropical algebra support
 tropical-gemm = { path = "../tropical-gemm/crates/tropical-gemm", optional = true }
+
+# Optional: CUDA support
 tropical-gemm-cuda = { path = "../tropical-gemm/crates/tropical-gemm-cuda", optional = true }
 cudarc = { version = "0.12", optional = true }
 
@@ -30,15 +32,30 @@ rand = "0.8"
 approx = "0.5"
 
 [features]
-default = ["parallel", "tropical-kernels"]
+# Default: minimal, just Standard algebra
+default = []
+
+# Tropical algebra types (MaxPlus, MinPlus, MaxMul) - pure Rust generic implementation
+tropical = []
+
+# Optimized SIMD kernels for tropical operations (implies tropical)
+tropical-kernels = ["tropical", "tropical-gemm"]
+
+# Parallel execution
 parallel = ["rayon"]
-tropical-kernels = ["tropical-gemm"]
-cuda = ["tropical-gemm-cuda", "cudarc", "tropical-kernels"]
+
+# CUDA backend (implies tropical-kernels)
+cuda = ["tropical-kernels", "tropical-gemm-cuda", "cudarc"]
+
+# Convenience: all features
+full = ["tropical-kernels", "parallel"]
 
 [[example]]
 name = "basic_einsum"
 path = "examples/basic_einsum.rs"
+required-features = ["tropical"]
 
 [[example]]
 name = "tropical_network"
 path = "examples/tropical_network.rs"
+required-features = ["tropical"]

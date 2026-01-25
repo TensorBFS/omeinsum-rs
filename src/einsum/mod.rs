@@ -112,6 +112,11 @@ impl<T: Scalar, B: Backend> EinsumGradient<T, B> {
             self.ixs.len()
         );
 
+        // Handle single input case: gradient passes through unchanged
+        if inputs.len() == 1 {
+            return vec![grad_output.clone()];
+        }
+
         // For a single binary contraction (2 inputs), we can directly compute gradients
         if inputs.len() == 2 {
             let argmax = if A::needs_argmax() && !self.argmax_cache.is_empty() {

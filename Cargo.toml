@@ -26,7 +26,7 @@ tropical-gemm = { version = "0.2", optional = true }
 
 # Optional: CUDA support
 tropical-gemm-cuda = { version = "0.2", optional = true }
-cudarc = { version = "0.12", optional = true }
+cudarc = { version = "0.12", features = ["cuda-version-from-build-system"], optional = true }
 
 # Optional: Parallelism
 rayon = { version = "1.8", optional = true }

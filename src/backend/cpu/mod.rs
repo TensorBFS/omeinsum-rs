@@ -1,5 +1,7 @@
 //! CPU backend implementation.
 
+mod contract;
+
 use super::traits::{Backend, Storage};
 use crate::algebra::{Algebra, Scalar, Standard};
 use std::any::TypeId;

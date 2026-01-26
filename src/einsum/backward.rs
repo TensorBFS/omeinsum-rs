@@ -1,11 +1,49 @@
 //! Backward pass implementation for einsum gradients.
 //!
-//! This module provides gradient computation for binary tensor contractions,
+//! This module provides gradient computation for tensor contractions,
 //! supporting both standard arithmetic and tropical algebras.
+//!
+//! The key insight for standard algebra is the **index-exchange trick**:
+//! - Forward: `y = einsum(ix -> iy, x)`
+//! - Backward: `grad_x = einsum(iy -> ix, grad_y)`
 
 use crate::algebra::{Algebra, Scalar};
 use crate::backend::Backend;
 use crate::tensor::Tensor;
+use std::collections::HashMap;
+
+use super::engine::execute_unary_naive;
+
+/// Compute gradient for a unary einsum operation.
+///
+/// Uses the index-exchange trick: backward(ix -> iy) = forward(iy -> ix).
+///
+/// # Arguments
+///
+/// * `grad_y` - Gradient of the output tensor
+/// * `ix` - Input index labels
+/// * `iy` - Output index labels
+/// * `size_dict` - Mapping from index labels to sizes
+///
+/// # Returns
+///
+/// Gradient tensor with the same shape as the original input.
+pub fn contract_unary_backward<A, T, B>(
+    grad_y: &Tensor<T, B>,
+    ix: &[usize],
+    iy: &[usize],
+    size_dict: &HashMap<usize, usize>,
+) -> Tensor<T, B>
+where
+    A: Algebra<Scalar = T, Index = u32>,
+    T: Scalar,
+    B: Backend + Default,
+{
+    // The elegant insight: gradient is just einsum with swapped indices!
+    // Forward: y = einsum(ix -> iy, x)
+    // Backward: grad_x = einsum(iy -> ix, grad_y)
+    execute_unary_naive::<A, T, B>(grad_y, iy, ix, size_dict)
+}
 
 /// Compute gradients for a binary contraction.
 ///

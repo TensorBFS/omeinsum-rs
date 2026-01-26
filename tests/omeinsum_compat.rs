@@ -389,10 +389,8 @@ fn test_matmul_gradient() {
 }
 
 #[test]
-#[ignore = "Unary gradients not supported through convenience function"]
 fn test_trace_gradient() {
     // Test gradient of trace operation
-    // Note: Unary operations don't work with einsum_with_grad due to optimizer
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
     let (c, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
@@ -411,10 +409,8 @@ fn test_trace_gradient() {
 }
 
 #[test]
-#[ignore = "Unary gradients not supported through convenience function"]
 fn test_sum_gradient() {
     // Test gradient of sum operation
-    // Note: Unary operations don't work with einsum_with_grad due to optimizer
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
 
     let (c, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[]);

@@ -3,9 +3,11 @@
 //! This module provides bindings to NVIDIA's cuTENSOR library for
 //! high-performance tensor contractions on CUDA GPUs.
 
-pub mod sys;
+mod contract;
 mod handle;
+pub mod sys;
 
+pub use contract::{contract, CacheKey, PlanCache};
 pub use handle::{CutensorType, Handle, Plan, TensorDesc};
 
 use sys::cutensorStatus_t;
@@ -23,8 +25,10 @@ pub enum CutensorError {
     ArchMismatch,
     /// Operation not supported.
     NotSupported,
-    /// Other error with status code.
-    Other(i32),
+    /// cuTENSOR status error with status code.
+    Status(i32),
+    /// Other error with a descriptive message.
+    Other(String),
 }
 
 impl std::fmt::Display for CutensorError {
@@ -35,7 +39,8 @@ impl std::fmt::Display for CutensorError {
             CutensorError::InvalidValue => write!(f, "cuTENSOR invalid value"),
             CutensorError::ArchMismatch => write!(f, "cuTENSOR architecture mismatch"),
             CutensorError::NotSupported => write!(f, "cuTENSOR operation not supported"),
-            CutensorError::Other(code) => write!(f, "cuTENSOR error (code {})", code),
+            CutensorError::Status(code) => write!(f, "cuTENSOR status error (code {})", code),
+            CutensorError::Other(msg) => write!(f, "cuTENSOR error: {}", msg),
         }
     }
 }
@@ -58,6 +63,6 @@ pub fn check(status: cutensorStatus_t) -> Result<(), CutensorError> {
         cutensorStatus_t::INVALID_VALUE => Err(CutensorError::InvalidValue),
         cutensorStatus_t::ARCH_MISMATCH => Err(CutensorError::ArchMismatch),
         cutensorStatus_t::NOT_SUPPORTED => Err(CutensorError::NotSupported),
-        other => Err(CutensorError::Other(other as i32)),
+        other => Err(CutensorError::Status(other as i32)),
     }
 }

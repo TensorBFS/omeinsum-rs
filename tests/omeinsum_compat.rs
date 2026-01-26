@@ -257,14 +257,8 @@ fn test_matrix_vector_contraction() {
 fn test_batch_matrix_multiplication() {
     // ein"bij,bjk -> bik"(a, b) = batched matmul
     // Batch of 2, each 2x2 matrix
-    let a = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
-    let b = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0],
-        &[2, 2, 2],
-    );
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
 
     // bij,bjk->bik: batch matmul (contract over j, keep b)
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3]);
@@ -299,7 +293,7 @@ fn test_three_matrix_chain() {
     let result = d.to_vec();
     assert_eq!(result[0], 2.0); // D[0,0] = 2
     assert_eq!(result[3], 8.0); // D[1,1] = 8
-    // Total sum should be 2+4+6+8 = 20
+                                // Total sum should be 2+4+6+8 = 20
     let sum: f64 = result.iter().sum();
     assert!((sum - 20.0).abs() < 1e-10);
 }
@@ -500,10 +494,8 @@ fn test_tropical_minplus_shortest_path() {
     // Row 1: to 0=inf, to 1=0, to 2=3
     // Row 2: to 0=inf, to 1=inf, to 2=0
     // In column-major: col0=[0,inf,inf], col1=[2,0,inf], col2=[10,3,0]
-    let adj = Tensor::<f32, Cpu>::from_data(
-        &[0.0, inf, inf, 2.0, 0.0, inf, 10.0, 3.0, 0.0],
-        &[3, 3],
-    );
+    let adj =
+        Tensor::<f32, Cpu>::from_data(&[0.0, inf, inf, 2.0, 0.0, inf, 10.0, 3.0, 0.0], &[3, 3]);
 
     // A @ A in MinPlus gives 2-hop shortest paths
     let paths = einsum::<MinPlus<f32>, _, _>(&[&adj, &adj], &[&[0, 1], &[1, 2]], &[0, 2]);
@@ -537,14 +529,8 @@ fn test_tropical_chain() {
 #[test]
 fn test_3d_tensor_contraction() {
     // ein"ijk,jkl -> il"
-    let a = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
-    let b = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
 
     // ijk,jkl->il: contract over j and k
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2], &[1, 2, 3]], &[0, 3]);
@@ -558,11 +544,8 @@ fn test_4d_batch_contraction() {
     let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
 
-    let c = einsum::<Standard<f64>, _, _>(
-        &[&a, &b],
-        &[&[0, 1, 2, 3], &[0, 1, 3, 4]],
-        &[0, 1, 2, 4],
-    );
+    let c =
+        einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2, 3], &[0, 1, 3, 4]], &[0, 1, 2, 4]);
 
     assert_eq!(c.shape(), &[2, 2, 2, 2]);
 }

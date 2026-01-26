@@ -23,8 +23,9 @@ use num_traits::{One, Zero};
 #[repr(transparent)]
 pub struct Standard<T: Scalar>(pub T);
 
-impl<T: Scalar + Zero + One + PartialEq + std::ops::Add<Output = T> + std::ops::Mul<Output = T>> Semiring
-    for Standard<T>
+impl<
+        T: Scalar + Zero + One + PartialEq + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
+    > Semiring for Standard<T>
 {
     type Scalar = T;
 
@@ -64,8 +65,9 @@ impl<T: Scalar + Zero + One + PartialEq + std::ops::Add<Output = T> + std::ops::
     }
 }
 
-impl<T: Scalar + Zero + One + PartialEq + std::ops::Add<Output = T> + std::ops::Mul<Output = T>> Algebra
-    for Standard<T>
+impl<
+        T: Scalar + Zero + One + PartialEq + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
+    > Algebra for Standard<T>
 {
     type Index = u32;
 
@@ -95,7 +97,10 @@ impl<T: Scalar + Zero + One + PartialEq + std::ops::Add<Output = T> + std::ops::
     fn mul_backward(self, rhs: Self, grad_out: Self::Scalar) -> (Self::Scalar, Self::Scalar) {
         // Standard multiplication: chain rule
         // d/da (a × b) = b, d/db (a × b) = a
-        (Standard(grad_out).mul(rhs).to_scalar(), Standard(grad_out).mul(self).to_scalar())
+        (
+            Standard(grad_out).mul(rhs).to_scalar(),
+            Standard(grad_out).mul(self).to_scalar(),
+        )
     }
 
     #[inline]

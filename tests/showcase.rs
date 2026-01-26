@@ -54,8 +54,12 @@ fn test_bayesian_network_marginals() {
     // Step 2: Contract t1 with φ₁ (element-wise multiply then reduce to scalar...
     // Actually we need to keep index for further contraction)
     // t2[j] = t1[j] × φ₁[j]
-    let t2_data: Vec<f64> = t1.to_vec().iter().zip(phi1.to_vec().iter())
-        .map(|(a, b)| a * b).collect();
+    let t2_data: Vec<f64> = t1
+        .to_vec()
+        .iter()
+        .zip(phi1.to_vec().iter())
+        .map(|(a, b)| a * b)
+        .collect();
     let t2 = Tensor::<f64, Cpu>::from_data(&t2_data, &[2]);
 
     // Step 3: Contract t2 with ψ₁₂: t3[k] = Σⱼ t2[j] × ψ₁₂[j,k]
@@ -89,13 +93,21 @@ fn test_bayesian_network_marginals() {
 
     // Verify partition function
     let eps = 1e-10;
-    assert!((z - z_manual).abs() < eps, "Z mismatch: {} vs {}", z, z_manual);
+    assert!(
+        (z - z_manual).abs() < eps,
+        "Z mismatch: {} vs {}",
+        z,
+        z_manual
+    );
     assert!((z - 57.0).abs() < eps, "Z should be 57, got {}", z);
 
     // Marginal P(X₁=1) = sum_x1_eq_1 / Z
     let p_x1_eq_1 = sum_x1_eq_1 / z_manual;
-    assert!((p_x1_eq_1 - 45.0/57.0).abs() < eps,
-            "P(X₁=1) should be 45/57 ≈ 0.789, got {}", p_x1_eq_1);
+    assert!(
+        (p_x1_eq_1 - 45.0 / 57.0).abs() < eps,
+        "P(X₁=1) should be 45/57 ≈ 0.789, got {}",
+        p_x1_eq_1
+    );
 
     // =========================================================================
     // Gradient Computation: Demonstrate that differentiation = marginalization
@@ -118,8 +130,16 @@ fn test_bayesian_network_marginals() {
     // result[0] = φ₀[0]×ψ[0,0] + φ₀[1]×ψ[1,0] = 1×2 + 2×1 = 4
     // result[1] = φ₀[0]×ψ[0,1] + φ₀[1]×ψ[1,1] = 1×1 + 2×2 = 5
     let result_vec = result.to_vec();
-    assert!((result_vec[0] - 4.0).abs() < eps, "result[0] should be 4, got {}", result_vec[0]);
-    assert!((result_vec[1] - 5.0).abs() < eps, "result[1] should be 5, got {}", result_vec[1]);
+    assert!(
+        (result_vec[0] - 4.0).abs() < eps,
+        "result[0] should be 4, got {}",
+        result_vec[0]
+    );
+    assert!(
+        (result_vec[1] - 5.0).abs() < eps,
+        "result[1] should be 5, got {}",
+        result_vec[1]
+    );
 
     // Compute gradients with grad_output = [1, 1]
     let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
@@ -130,10 +150,16 @@ fn test_bayesian_network_marginals() {
     // grad_φ₀[0] = 1×2 + 1×1 = 3 (row sum of row 0)
     // grad_φ₀[1] = 1×1 + 1×2 = 3 (row sum of row 1)
     let grad_phi0 = grads[0].to_vec();
-    assert!((grad_phi0[0] - 3.0).abs() < eps,
-            "grad_φ₀[0] should be 3, got {}", grad_phi0[0]);
-    assert!((grad_phi0[1] - 3.0).abs() < eps,
-            "grad_φ₀[1] should be 3, got {}", grad_phi0[1]);
+    assert!(
+        (grad_phi0[0] - 3.0).abs() < eps,
+        "grad_φ₀[0] should be 3, got {}",
+        grad_phi0[0]
+    );
+    assert!(
+        (grad_phi0[1] - 3.0).abs() < eps,
+        "grad_φ₀[1] should be 3, got {}",
+        grad_phi0[1]
+    );
 
     // Verify gradient of ψ₀₁:
     // grad_ψ₀₁[i,j] = grad_output[j] × φ₀[i]
@@ -142,16 +168,24 @@ fn test_bayesian_network_marginals() {
     let grad_psi01 = grads[1].to_vec();
     let expected_grad_psi = [1.0, 2.0, 1.0, 2.0];
     for (i, (&got, &expected)) in grad_psi01.iter().zip(expected_grad_psi.iter()).enumerate() {
-        assert!((got - expected).abs() < eps,
-                "grad_ψ₀₁[{}] should be {}, got {}", i, expected, got);
+        assert!(
+            (got - expected).abs() < eps,
+            "grad_ψ₀₁[{}] should be {}, got {}",
+            i,
+            expected,
+            got
+        );
     }
 
     println!("Bayesian Network Marginals Test:");
     println!("  Z = {} (expected 57)", z);
-    println!("  P(X₁=1) = {:.4} (expected {:.4})", p_x1_eq_1, 45.0/57.0);
+    println!("  P(X₁=1) = {:.4} (expected {:.4})", p_x1_eq_1, 45.0 / 57.0);
     println!("  Forward result: {:?}", result_vec);
     println!("  Gradient of φ₀: {:?} (expected [3, 3])", grad_phi0);
-    println!("  Gradient of ψ₀₁: {:?} (expected [1, 2, 1, 2])", grad_psi01);
+    println!(
+        "  Gradient of ψ₀₁: {:?} (expected [1, 2, 1, 2])",
+        grad_psi01
+    );
     println!("  Gradient insight: differentiation = marginalization ✓");
 }
 
@@ -183,10 +217,10 @@ fn test_tensor_train_complex_contraction() {
     // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]] = [1+i, 0, 0, 1-i]
     let a1 = Tensor::<C64, Cpu>::from_data(
         &[
-            C64::new(1.0, 1.0),   // A[0,0] = 1+i
-            C64::new(0.0, 0.0),   // A[1,0] = 0
-            C64::new(0.0, 0.0),   // A[0,1] = 0
-            C64::new(1.0, -1.0),  // A[1,1] = 1-i
+            C64::new(1.0, 1.0),  // A[0,0] = 1+i
+            C64::new(0.0, 0.0),  // A[1,0] = 0
+            C64::new(0.0, 0.0),  // A[0,1] = 0
+            C64::new(1.0, -1.0), // A[1,1] = 1-i
         ],
         &[2, 2],
     );
@@ -197,10 +231,10 @@ fn test_tensor_train_complex_contraction() {
     // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]] = [2, -i, i, 3]
     let a2 = Tensor::<C64, Cpu>::from_data(
         &[
-            C64::new(2.0, 0.0),   // A[0,0] = 2
-            C64::new(0.0, -1.0),  // A[1,0] = -i
-            C64::new(0.0, 1.0),   // A[0,1] = i
-            C64::new(3.0, 0.0),   // A[1,1] = 3
+            C64::new(2.0, 0.0),  // A[0,0] = 2
+            C64::new(0.0, -1.0), // A[1,0] = -i
+            C64::new(0.0, 1.0),  // A[0,1] = i
+            C64::new(3.0, 0.0),  // A[1,1] = 3
         ],
         &[2, 2],
     );
@@ -216,8 +250,8 @@ fn test_tensor_train_complex_contraction() {
 
     let result = einsum::<Standard<C64>, _, _>(
         &[&a1, &a2],
-        &[&[0, 1], &[1, 2]],  // s1=0, b=1, s2=2; contract over b
-        &[0, 2],               // output: [s1, s2]
+        &[&[0, 1], &[1, 2]], // s1=0, b=1, s2=2; contract over b
+        &[0, 2],             // output: [s1, s2]
     );
 
     assert_eq!(result.shape(), &[2, 2]);
@@ -228,40 +262,54 @@ fn test_tensor_train_complex_contraction() {
 
     // Column-major: [result[0,0], result[1,0], result[0,1], result[1,1]]
     let expected = [
-        C64::new(2.0, 2.0),    // result[0,0] = 2+2i
-        C64::new(-1.0, -1.0),  // result[1,0] = -1-i
-        C64::new(-1.0, 1.0),   // result[0,1] = -1+i
-        C64::new(3.0, -3.0),   // result[1,1] = 3-3i
+        C64::new(2.0, 2.0),   // result[0,0] = 2+2i
+        C64::new(-1.0, -1.0), // result[1,0] = -1-i
+        C64::new(-1.0, 1.0),  // result[0,1] = -1+i
+        C64::new(3.0, -3.0),  // result[1,1] = 3-3i
     ];
 
     for (i, (got, exp)) in result_vec.iter().zip(expected.iter()).enumerate() {
-        assert!((got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
-                "result[{}] mismatch: got {:?}, expected {:?}", i, got, exp);
+        assert!(
+            (got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
+            "result[{}] mismatch: got {:?}, expected {:?}",
+            i,
+            got,
+            exp
+        );
     }
 
     // Compute norm ⟨ψ|ψ⟩ = Σ_{s1,s2} |ψ[s1,s2]|²
     let norm_sq: f64 = result_vec.iter().map(|c| c.norm_sqr()).sum();
 
     // Manual: |2+2i|² + |-1-i|² + |-1+i|² + |3-3i|² = 8 + 2 + 2 + 18 = 30
-    assert!((norm_sq - 30.0).abs() < eps, "Norm² should be 30, got {}", norm_sq);
+    assert!(
+        (norm_sq - 30.0).abs() < eps,
+        "Norm² should be 30, got {}",
+        norm_sq
+    );
 
     // Test einsum_with_grad for complex tensors
-    let (result2, grad_fn) = einsum_with_grad::<Standard<C64>, _, _>(
-        &[&a1, &a2],
-        &[&[0, 1], &[1, 2]],
-        &[0, 2],
-    );
+    let (result2, grad_fn) =
+        einsum_with_grad::<Standard<C64>, _, _>(&[&a1, &a2], &[&[0, 1], &[1, 2]], &[0, 2]);
 
     // Verify forward pass gives same result
     let result2_vec = result2.to_vec();
     for (i, (got, exp)) in result2_vec.iter().zip(expected.iter()).enumerate() {
-        assert!((got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
-                "einsum_with_grad result[{}] mismatch", i);
+        assert!(
+            (got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
+            "einsum_with_grad result[{}] mismatch",
+            i
+        );
     }
 
     // Compute gradient with grad_output = all ones (complex)
     let grad_output = Tensor::<C64, Cpu>::from_data(
-        &[C64::new(1.0, 0.0), C64::new(1.0, 0.0), C64::new(1.0, 0.0), C64::new(1.0, 0.0)],
+        &[
+            C64::new(1.0, 0.0),
+            C64::new(1.0, 0.0),
+            C64::new(1.0, 0.0),
+            C64::new(1.0, 0.0),
+        ],
         &[2, 2],
     );
     let grads = grad_fn.backward::<Standard<C64>>(&grad_output, &[&a1, &a2]);
@@ -275,15 +323,20 @@ fn test_tensor_train_complex_contraction() {
 
     let grad_a1 = grads[0].to_vec();
     let expected_grad_a1 = [
-        C64::new(2.0, 1.0),   // grad_A1[0,0]
-        C64::new(2.0, 1.0),   // grad_A1[1,0]
-        C64::new(3.0, -1.0),  // grad_A1[0,1]
-        C64::new(3.0, -1.0),  // grad_A1[1,1]
+        C64::new(2.0, 1.0),  // grad_A1[0,0]
+        C64::new(2.0, 1.0),  // grad_A1[1,0]
+        C64::new(3.0, -1.0), // grad_A1[0,1]
+        C64::new(3.0, -1.0), // grad_A1[1,1]
     ];
 
     for (i, (got, exp)) in grad_a1.iter().zip(expected_grad_a1.iter()).enumerate() {
-        assert!((got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
-                "grad_A1[{}] mismatch: got {:?}, expected {:?}", i, got, exp);
+        assert!(
+            (got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
+            "grad_A1[{}] mismatch: got {:?}, expected {:?}",
+            i,
+            got,
+            exp
+        );
     }
 
     println!("Tensor Train Complex Contraction Test:");
@@ -365,9 +418,9 @@ fn test_max_weight_independent_set() {
         let selected: Vec<usize> = (0..5).filter(|&i| (config >> i) & 1 == 1).collect();
 
         // Check independence: no edge should have both endpoints selected
-        let is_independent = edges.iter().all(|&(u, v)| {
-            !((config >> u) & 1 == 1 && (config >> v) & 1 == 1)
-        });
+        let is_independent = edges
+            .iter()
+            .all(|&(u, v)| !((config >> u) & 1 == 1 && (config >> v) & 1 == 1));
 
         if is_independent {
             let weight: f64 = selected.iter().map(|&i| weights[i]).sum();
@@ -382,15 +435,23 @@ fn test_max_weight_independent_set() {
     println!("  Pentagon graph with weights {:?}", weights);
     println!("  Maximum weight: {}", max_weight);
     println!("  Optimal selection: {:?}", best_config);
-    println!("  Selected vertices: {:?}",
-             best_config.iter().enumerate()
-                 .filter(|(_, &s)| s == 1)
-                 .map(|(i, _)| i)
-                 .collect::<Vec<_>>());
+    println!(
+        "  Selected vertices: {:?}",
+        best_config
+            .iter()
+            .enumerate()
+            .filter(|(_, &s)| s == 1)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+    );
 
     // Verify expected result
     assert_eq!(max_weight, 9.0, "Maximum weight should be 9");
-    assert_eq!(best_config, vec![0, 1, 0, 1, 0], "Optimal should be vertices {{1, 3}}");
+    assert_eq!(
+        best_config,
+        vec![0, 1, 0, 1, 0],
+        "Optimal should be vertices {{1, 3}}"
+    );
 
     // Now demonstrate tropical einsum for a simple case:
     // Contract two adjacent vertices with edge constraint
@@ -406,9 +467,15 @@ fn test_max_weight_independent_set() {
     // max = 5 (select only vertex 1)
 
     let max_01 = result01.to_vec()[0];
-    assert_eq!(max_01, 5.0, "Max for edge (0,1) should be 5 (select vertex 1 only)");
+    assert_eq!(
+        max_01, 5.0,
+        "Max for edge (0,1) should be 5 (select vertex 1 only)"
+    );
 
-    println!("  Tropical einsum verification: max over edge (0,1) = {} ✓", max_01);
+    println!(
+        "  Tropical einsum verification: max over edge (0,1) = {} ✓",
+        max_01
+    );
 
     // The gradient insight:
     // ∂(max_weight)/∂(wᵥ) = 1 if vertex v is in optimal set

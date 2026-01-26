@@ -1185,8 +1185,7 @@ mod tests {
         let mut ein = Einsum::new(vec![vec![0], vec![1]], vec![0, 1], sizes);
 
         ein.optimize_greedy();
-        let (result, _argmax_cache) =
-            ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a, &b]);
+        let (result, _argmax_cache) = ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a, &b]);
 
         assert_eq!(result.shape(), &[2, 3]);
         assert_eq!(result.to_vec(), vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);

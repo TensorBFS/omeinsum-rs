@@ -8,8 +8,8 @@ mod storage;
 pub use storage::CudaStorage;
 
 use crate::algebra::Scalar;
-use cutensor::{contract, CacheKey, CutensorType, Handle, PlanCache, TensorDesc};
 use cudarc::driver::CudaDevice;
+use cutensor::{contract, CacheKey, CutensorType, Handle, PlanCache, TensorDesc};
 use std::cell::RefCell;
 use std::sync::Arc;
 

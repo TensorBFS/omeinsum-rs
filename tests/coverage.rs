@@ -219,10 +219,7 @@ fn test_tensor_diagonal_3x3() {
     //   [[1,2,3],
     //    [4,5,6],
     //    [7,8,9]]
-    let t = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0],
-        &[3, 3]
-    );
+    let t = Tensor::<f64, Cpu>::from_data(&[1.0, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0], &[3, 3]);
     let diag = t.diagonal();
     assert_eq!(diag.shape(), &[3]);
     // Diagonal elements: [1,5,9]
@@ -249,8 +246,7 @@ fn test_einsum_with_grad_single_tensor() {
     // Single tensor should return unchanged gradient
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-    let (result, grad_fn) =
-        einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[0, 1]);
+    let (result, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[0, 1]);
 
     assert_eq!(result.to_vec(), a.to_vec());
 
@@ -266,15 +262,12 @@ fn test_einsum_batch_contraction() {
         &[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], // 2 batches of 2x2 identity-ish
         &[2, 2, 2],
     );
-    let b = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
 
     let c = einsum::<Standard<f64>, _, _>(
         &[&a, &b],
         &[&[0, 1, 2], &[0, 2, 3]], // b=0, i=1, j=2, k=3
-        &[0, 1, 3],                 // output: b, i, k
+        &[0, 1, 3],                // output: b, i, k
     );
 
     assert_eq!(c.shape(), &[2, 2, 2]);
@@ -477,7 +470,12 @@ fn test_complex_tensor_basic() {
     use num_complex::Complex64 as C64;
 
     let t = Tensor::<C64, Cpu>::from_data(
-        &[C64::new(1.0, 0.0), C64::new(0.0, 1.0), C64::new(1.0, 1.0), C64::new(2.0, 0.0)],
+        &[
+            C64::new(1.0, 0.0),
+            C64::new(0.0, 1.0),
+            C64::new(1.0, 1.0),
+            C64::new(2.0, 0.0),
+        ],
         &[2, 2],
     );
 
@@ -490,11 +488,21 @@ fn test_complex_gemm() {
     use num_complex::Complex64 as C64;
 
     let a = Tensor::<C64, Cpu>::from_data(
-        &[C64::new(1.0, 0.0), C64::new(0.0, 0.0), C64::new(0.0, 0.0), C64::new(1.0, 0.0)],
+        &[
+            C64::new(1.0, 0.0),
+            C64::new(0.0, 0.0),
+            C64::new(0.0, 0.0),
+            C64::new(1.0, 0.0),
+        ],
         &[2, 2],
     );
     let b = Tensor::<C64, Cpu>::from_data(
-        &[C64::new(1.0, 1.0), C64::new(2.0, 0.0), C64::new(0.0, 1.0), C64::new(3.0, 0.0)],
+        &[
+            C64::new(1.0, 1.0),
+            C64::new(2.0, 0.0),
+            C64::new(0.0, 1.0),
+            C64::new(3.0, 0.0),
+        ],
         &[2, 2],
     );
 
@@ -514,11 +522,11 @@ fn test_gemm_batched_standard() {
     // 2 batches of 2x2 matrices
     let a = vec![
         1.0f32, 2.0, 3.0, 4.0, // batch 0
-        5.0, 6.0, 7.0, 8.0,    // batch 1
+        5.0, 6.0, 7.0, 8.0, // batch 1
     ];
     let b = vec![
         1.0f32, 0.0, 0.0, 1.0, // batch 0: identity
-        1.0, 0.0, 0.0, 1.0,    // batch 1: identity
+        1.0, 0.0, 0.0, 1.0, // batch 1: identity
     ];
 
     let c = cpu.gemm_batched::<Standard<f32>>(&a, 2, 2, 2, &b, 2);
@@ -618,8 +626,8 @@ fn test_einsum_treesa_optimizer() {
 
     // Create einsum and optimize with TreeSA
     let mut ein = Einsum::new(
-        vec![vec![0, 1], vec![1, 2], vec![2, 3]],  // A[i,j], B[j,k], C[k,l]
-        vec![0, 3],                                  // D[i,l]
+        vec![vec![0, 1], vec![1, 2], vec![2, 3]], // A[i,j], B[j,k], C[k,l]
+        vec![0, 3],                               // D[i,l]
         [(0, 2), (1, 2), (2, 2), (3, 2)].into(),
     );
 
@@ -639,11 +647,8 @@ fn test_einsum_three_tensor_standard() {
     let c = Tensor::<f64, Cpu>::from_data(&[2.0, 0.0, 0.0, 2.0], &[2, 2]);
 
     // Contract three tensors: (A @ B) @ C
-    let result = einsum::<Standard<f64>, _, _>(
-        &[&a, &b, &c],
-        &[&[0, 1], &[1, 2], &[2, 3]],
-        &[0, 3],
-    );
+    let result =
+        einsum::<Standard<f64>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
 
     assert_eq!(result.shape(), &[2, 2]);
 }
@@ -839,11 +844,8 @@ fn test_minplus_einsum_with_grad() {
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&[0.0, 10.0, 10.0, 0.0], &[2, 2]);
 
-    let (result, grad_fn) = einsum_with_grad::<MinPlus<f64>, _, _>(
-        &[&a, &b],
-        &[&[0, 1], &[1, 2]],
-        &[0, 2],
-    );
+    let (result, grad_fn) =
+        einsum_with_grad::<MinPlus<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
 
     assert_eq!(result.shape(), &[2, 2]);
 
@@ -865,11 +867,8 @@ fn test_maxmul_einsum_with_grad() {
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&[2.0, 0.5, 0.5, 2.0], &[2, 2]);
 
-    let (result, grad_fn) = einsum_with_grad::<MaxMul<f64>, _, _>(
-        &[&a, &b],
-        &[&[0, 1], &[1, 2]],
-        &[0, 2],
-    );
+    let (result, grad_fn) =
+        einsum_with_grad::<MaxMul<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
 
     assert_eq!(result.shape(), &[2, 2]);
 
@@ -891,11 +890,8 @@ fn test_minplus_f32_einsum_with_grad() {
     let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f32, Cpu>::from_data(&[0.0, 10.0, 10.0, 0.0], &[2, 2]);
 
-    let (result, grad_fn) = einsum_with_grad::<MinPlus<f32>, _, _>(
-        &[&a, &b],
-        &[&[0, 1], &[1, 2]],
-        &[0, 2],
-    );
+    let (result, grad_fn) =
+        einsum_with_grad::<MinPlus<f32>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
 
     assert_eq!(result.shape(), &[2, 2]);
 
@@ -914,11 +910,8 @@ fn test_maxmul_f32_einsum_with_grad() {
     let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f32, Cpu>::from_data(&[2.0, 0.5, 0.5, 2.0], &[2, 2]);
 
-    let (result, grad_fn) = einsum_with_grad::<MaxMul<f32>, _, _>(
-        &[&a, &b],
-        &[&[0, 1], &[1, 2]],
-        &[0, 2],
-    );
+    let (result, grad_fn) =
+        einsum_with_grad::<MaxMul<f32>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
 
     assert_eq!(result.shape(), &[2, 2]);
 
@@ -933,20 +926,14 @@ fn test_maxmul_f32_einsum_with_grad() {
 fn test_batched_tropical_forward() {
     // Test batched tropical einsum (forward only - backward not yet implemented for batched)
 
-    let a = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        &[2, 2, 2],
-    );
-    let b = Tensor::<f64, Cpu>::from_data(
-        &[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0],
-        &[2, 2, 2],
-    );
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
 
     // Batched matrix multiply with tropical algebra
     let result = einsum::<MaxPlus<f64>, _, _>(
         &[&a, &b],
-        &[&[0, 1, 2], &[0, 2, 3]],  // batch=0, contract=2
-        &[0, 1, 3],                   // output: batch, left, right
+        &[&[0, 1, 2], &[0, 2, 3]], // batch=0, contract=2
+        &[0, 1, 3],                // output: batch, left, right
     );
 
     assert_eq!(result.shape(), &[2, 2, 2]);
@@ -975,9 +962,8 @@ fn test_einsum_with_grad_more_than_two() {
     // Attempting backward should panic with unimplemented
     let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
 
-    let result = std::panic::catch_unwind(|| {
-        grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b, &c])
-    });
+    let result =
+        std::panic::catch_unwind(|| grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b, &c]));
 
     assert!(result.is_err(), "backward for >2 tensors should panic");
 }
@@ -1049,8 +1035,8 @@ fn test_einsum_builder_default() {
 #[cfg(feature = "tropical")]
 #[test]
 fn test_minplus_f32_operations() {
-    use omeinsum::MinPlus;
     use omeinsum::algebra::Semiring;
+    use omeinsum::MinPlus;
 
     let a = MinPlus(3.0_f32);
     let b = MinPlus(5.0_f32);
@@ -1071,8 +1057,8 @@ fn test_minplus_f32_operations() {
 #[cfg(feature = "tropical")]
 #[test]
 fn test_maxmul_f32_operations() {
-    use omeinsum::MaxMul;
     use omeinsum::algebra::Semiring;
+    use omeinsum::MaxMul;
 
     let a = MaxMul(3.0_f32);
     let b = MaxMul(5.0_f32);
@@ -1229,9 +1215,11 @@ fn test_einsum_with_grad_three_tensors_tropical_forward() {
     // Test einsum_with_grad forward pass for 3 tensors with tropical algebra
     // This exercises the execute_pairwise_with_argmax path for tropical
 
-    let a = Tensor::<f64, Cpu>::from_data(&[0.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 0.0], &[2, 2]);
+    let a =
+        Tensor::<f64, Cpu>::from_data(&[0.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 0.0], &[2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    let c = Tensor::<f64, Cpu>::from_data(&[0.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 0.0], &[2, 2]);
+    let c =
+        Tensor::<f64, Cpu>::from_data(&[0.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 0.0], &[2, 2]);
 
     // einsum_with_grad uses optimized tree path
     let (result, _grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(

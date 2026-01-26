@@ -23,7 +23,15 @@ pub use num_complex::{Complex32, Complex64};
 
 /// Marker trait for scalar types that can be used in tensors.
 pub trait Scalar:
-    Copy + Clone + Send + Sync + Default + std::fmt::Debug + 'static + bytemuck::Pod + std::ops::AddAssign
+    Copy
+    + Clone
+    + Send
+    + Sync
+    + Default
+    + std::fmt::Debug
+    + 'static
+    + bytemuck::Pod
+    + std::ops::AddAssign
 {
 }
 

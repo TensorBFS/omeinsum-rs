@@ -63,7 +63,10 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// Returns `(result, argmax)` where `argmax[i, j]` is the index `k`
     /// that "won" the reduction for element `[i, j]`.
-    pub fn gemm_with_argmax<A: Algebra<Scalar = T, Index = u32>>(&self, other: &Self) -> (Self, Tensor<u32, B>) {
+    pub fn gemm_with_argmax<A: Algebra<Scalar = T, Index = u32>>(
+        &self,
+        other: &Self,
+    ) -> (Self, Tensor<u32, B>) {
         assert_eq!(self.ndim(), 2, "gemm requires 2D tensors");
         assert_eq!(other.ndim(), 2, "gemm requires 2D tensors");
         assert_eq!(
@@ -79,8 +82,9 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         let a = self.contiguous();
         let b = other.contiguous();
 
-        let (c_storage, argmax_storage) =
-            self.backend.gemm_with_argmax::<A>(&a.storage, m, k, &b.storage, n);
+        let (c_storage, argmax_storage) = self
+            .backend
+            .gemm_with_argmax::<A>(&a.storage, m, k, &b.storage, n);
 
         let c = Self::from_raw(
             c_storage,
@@ -206,8 +210,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
             // Batched case: use batched GEMM
             // A is [batch_size * left_size, contract_size], need [batch_size, left_size, contract_size]
             // B is [batch_size * contract_size, right_size], need [batch_size, contract_size, right_size]
-            let a_batched = a_permuted.reshape(&[batch_size, left_size, contract_size]).contiguous();
-            let b_batched = b_permuted.reshape(&[batch_size, contract_size, right_size]).contiguous();
+            let a_batched = a_permuted
+                .reshape(&[batch_size, left_size, contract_size])
+                .contiguous();
+            let b_batched = b_permuted
+                .reshape(&[batch_size, contract_size, right_size])
+                .contiguous();
 
             if track_argmax {
                 let (c_storage, argmax_storage) = self.backend.gemm_batched_with_argmax::<A>(
@@ -320,18 +328,17 @@ fn classify_indices(
         }
     }
 
-    let right: Vec<usize> = ib
-        .iter()
-        .filter(|i| !ia_set.contains(i))
-        .copied()
-        .collect();
+    let right: Vec<usize> = ib.iter().filter(|i| !ia_set.contains(i)).copied().collect();
 
     (batch, left, right, contracted)
 }
 
 /// Find index of value in slice.
 fn index_of(slice: &[usize], value: usize) -> usize {
-    slice.iter().position(|&x| x == value).expect("Index not found")
+    slice
+        .iter()
+        .position(|&x| x == value)
+        .expect("Index not found")
 }
 
 /// Compute permutation to reorder indices.
@@ -350,7 +357,12 @@ fn compute_permutation(
 
     target
         .iter()
-        .map(|i| current.iter().position(|x| x == i).expect("Index not found"))
+        .map(|i| {
+            current
+                .iter()
+                .position(|x| x == i)
+                .expect("Index not found")
+        })
         .collect()
 }
 
@@ -413,14 +425,10 @@ mod tests {
     fn test_contract_binary_batched() {
         // A[b,i,j] × B[b,j,k] → C[b,i,k]
         // 2 batches, 2x2 matrices
-        let a = Tensor::<f32, Cpu>::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            &[2, 2, 2],
-        );
-        let b = Tensor::<f32, Cpu>::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 0.0, 1.0],
-            &[2, 2, 2],
-        );
+        let a =
+            Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+        let b =
+            Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
 
         let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3]);
 

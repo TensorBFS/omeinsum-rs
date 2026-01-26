@@ -148,29 +148,27 @@ where
         let argmax_contig = argmax.contiguous();
 
         // Get storage references
-        let grad_c_storage = grad_c_contig.storage().expect("contiguous tensor should have storage");
-        let b_storage = b_contig.storage().expect("contiguous tensor should have storage");
-        let a_storage = a_contig.storage().expect("contiguous tensor should have storage");
-        let argmax_storage = argmax_contig.storage().expect("contiguous tensor should have storage");
+        let grad_c_storage = grad_c_contig
+            .storage()
+            .expect("contiguous tensor should have storage");
+        let b_storage = b_contig
+            .storage()
+            .expect("contiguous tensor should have storage");
+        let a_storage = a_contig
+            .storage()
+            .expect("contiguous tensor should have storage");
+        let argmax_storage = argmax_contig
+            .storage()
+            .expect("contiguous tensor should have storage");
 
         // Use backend functions
-        let grad_a_storage = a.backend().gemm_backward_a::<A>(
-            grad_c_storage,
-            argmax_storage,
-            b_storage,
-            m,
-            k,
-            n,
-        );
+        let grad_a_storage =
+            a.backend()
+                .gemm_backward_a::<A>(grad_c_storage, argmax_storage, b_storage, m, k, n);
 
-        let grad_b_storage = a.backend().gemm_backward_b::<A>(
-            grad_c_storage,
-            argmax_storage,
-            a_storage,
-            m,
-            k,
-            n,
-        );
+        let grad_b_storage =
+            a.backend()
+                .gemm_backward_b::<A>(grad_c_storage, argmax_storage, a_storage, m, k, n);
 
         let grad_a = Tensor::from_storage(grad_a_storage, a_shape, a.backend().clone());
         let grad_b = Tensor::from_storage(grad_b_storage, b_shape, b.backend().clone());
@@ -205,18 +203,12 @@ mod tests {
         // Column-major: data [1,2,3,4,5,6] for shape [2,3] represents:
         // A = [[1, 3, 5],
         //      [2, 4, 6]]
-        let a = Tensor::<f32, Cpu>::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            &[2, 3],
-        );
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         // Column-major: data [1,2,3,4,5,6] for shape [3,2] represents:
         // B = [[1, 4],
         //      [2, 5],
         //      [3, 6]]
-        let b = Tensor::<f32, Cpu>::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            &[3, 2],
-        );
+        let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]);
 
         // grad_c is all ones [2, 2] -> [[1, 1], [1, 1]]
         let grad_c = Tensor::<f32, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
@@ -225,9 +217,8 @@ mod tests {
         let ib = &[1, 2]; // j, k
         let iy = &[0, 2]; // i, k
 
-        let (grad_a, grad_b) = contract_binary_backward::<Standard<f32>, _, _>(
-            &grad_c, &a, &b, None, ia, ib, iy,
-        );
+        let (grad_a, grad_b) =
+            contract_binary_backward::<Standard<f32>, _, _>(&grad_c, &a, &b, None, ia, ib, iy);
 
         // grad_A = grad_C @ B.T
         // B.T = [[1, 2, 3], [4, 5, 6]]
@@ -257,9 +248,8 @@ mod tests {
         let ib = &[1, 2];
         let iy = &[0, 2];
 
-        let (grad_a, grad_b) = contract_binary_backward::<Standard<f32>, _, _>(
-            &grad_c, &a, &b, None, ia, ib, iy,
-        );
+        let (grad_a, grad_b) =
+            contract_binary_backward::<Standard<f32>, _, _>(&grad_c, &a, &b, None, ia, ib, iy);
 
         // grad_A = grad_C @ B.T = [[1,0],[0,1]] @ [[5,7],[6,8]] = [[5,7],[6,8]]
         assert_eq!(grad_a.shape(), &[2, 2]);
@@ -299,7 +289,13 @@ mod tests {
         let iy = &[0, 2];
 
         let (grad_a, grad_b) = contract_binary_backward::<MaxPlus<f32>, _, _>(
-            &grad_c, &a, &b, Some(&argmax), ia, ib, iy,
+            &grad_c,
+            &a,
+            &b,
+            Some(&argmax),
+            ia,
+            ib,
+            iy,
         );
 
         // For tropical backward with argmax all = 1:
@@ -349,7 +345,13 @@ mod tests {
         let iy = &[0, 2];
 
         let (grad_a, grad_b) = contract_binary_backward::<MaxPlus<f32>, _, _>(
-            &grad_c, &a, &b, Some(&argmax), ia, ib, iy,
+            &grad_c,
+            &a,
+            &b,
+            Some(&argmax),
+            ia,
+            ib,
+            iy,
         );
 
         // argmax (column-major) = [0, 1, 0, 0]

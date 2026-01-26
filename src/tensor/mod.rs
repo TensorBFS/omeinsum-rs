@@ -306,7 +306,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         // Check axes are valid and unique
         let mut seen = vec![false; self.ndim()];
         for &ax in axes {
-            assert!(ax < self.ndim(), "Axis {} out of range for ndim {}", ax, self.ndim());
+            assert!(
+                ax < self.ndim(),
+                "Axis {} out of range for ndim {}",
+                ax,
+                self.ndim()
+            );
             assert!(!seen[ax], "Duplicate axis {} in permutation", ax);
             seen[ax] = true;
         }
@@ -325,7 +330,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
 
     /// Transpose (2D shorthand for permute).
     pub fn t(&self) -> Self {
-        assert_eq!(self.ndim(), 2, "transpose requires 2D tensor, got {}D", self.ndim());
+        assert_eq!(
+            self.ndim(),
+            2,
+            "transpose requires 2D tensor, got {}D",
+            self.ndim()
+        );
         self.permute(&[1, 0])
     }
 
@@ -370,12 +380,9 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         if self.is_contiguous() {
             self.clone()
         } else {
-            let storage = self.backend.copy_strided(
-                &self.storage,
-                &self.shape,
-                &self.strides,
-                self.offset,
-            );
+            let storage =
+                self.backend
+                    .copy_strided(&self.storage, &self.shape, &self.strides, self.offset);
             Self {
                 storage: Arc::new(storage),
                 shape: self.shape.clone(),
@@ -440,7 +447,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     where
         B: Default,
     {
-        assert!(axis < self.ndim(), "Axis {} out of bounds for {}D tensor", axis, self.ndim());
+        assert!(
+            axis < self.ndim(),
+            "Axis {} out of bounds for {}D tensor",
+            axis,
+            self.ndim()
+        );
 
         let mut new_shape: Vec<usize> = self.shape.clone();
         new_shape.remove(axis);
@@ -509,7 +521,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     where
         B: Default,
     {
-        assert_eq!(self.ndim(), 2, "diagonal requires 2D tensor, got {}D", self.ndim());
+        assert_eq!(
+            self.ndim(),
+            2,
+            "diagonal requires 2D tensor, got {}D",
+            self.ndim()
+        );
         assert_eq!(
             self.shape[0], self.shape[1],
             "diagonal requires square tensor, got {:?}",
@@ -656,10 +673,8 @@ mod tests {
     #[test]
     fn test_diagonal_3x3() {
         // Matrix: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-        let t = Tensor::<f32, Cpu>::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-            &[3, 3],
-        );
+        let t =
+            Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], &[3, 3]);
         let diag = t.diagonal();
 
         assert_eq!(diag.shape(), &[3]);

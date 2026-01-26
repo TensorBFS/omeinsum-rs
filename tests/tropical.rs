@@ -186,10 +186,8 @@ fn test_minplus_bellman_ford_step() {
     //   Col 1: [W[0,1], W[1,1], W[2,1]] = [inf, 0, 3]
     //   Col 2: [W[0,2], W[1,2], W[2,2]] = [inf, inf, 0]
     let inf = f32::INFINITY;
-    let weights = Tensor::<f32, Cpu>::from_data(
-        &[0.0, 4.0, 2.0, inf, 0.0, 3.0, inf, inf, 0.0],
-        &[3, 3],
-    );
+    let weights =
+        Tensor::<f32, Cpu>::from_data(&[0.0, 4.0, 2.0, inf, 0.0, 3.0, inf, inf, 0.0], &[3, 3]);
 
     // Initial distances from node 0
     let dist = Tensor::<f32, Cpu>::from_data(&[0.0, inf, inf], &[3, 1]);

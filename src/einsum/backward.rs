@@ -1,11 +1,17 @@
 //! Backward pass implementation for einsum gradients.
 //!
-//! This module provides gradient computation for tensor contractions,
-//! supporting both standard arithmetic and tropical algebras.
+//! This module provides gradient computation for tensor contractions:
 //!
-//! The key insight for standard algebra is the **index-exchange trick**:
+//! - **Standard algebra**: Uses the index-exchange trick for both unary and binary operations
+//! - **Tropical algebras**: Uses argmax routing for binary operations (unary not yet supported)
+//!
+//! ## Index-Exchange Trick (Standard Algebra)
+//!
+//! For unary einsum operations:
 //! - Forward: `y = einsum(ix -> iy, x)`
 //! - Backward: `grad_x = einsum(iy -> ix, grad_y)`
+//!
+//! This elegantly handles trace, sum, diagonal, transpose, and their gradients.
 
 use crate::algebra::{Algebra, Scalar};
 use crate::backend::Backend;

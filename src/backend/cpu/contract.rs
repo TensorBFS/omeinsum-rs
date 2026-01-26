@@ -78,6 +78,159 @@ pub(super) fn compute_permutation(
         .collect()
 }
 
+use crate::algebra::Algebra;
+use crate::backend::Cpu;
+use crate::tensor::compute_contiguous_strides;
+
+/// Execute tensor contraction on CPU via reshape→GEMM→reshape.
+pub(super) fn contract<A: Algebra>(
+    cpu: &Cpu,
+    a: &[A::Scalar],
+    shape_a: &[usize],
+    strides_a: &[usize],
+    modes_a: &[i32],
+    b: &[A::Scalar],
+    shape_b: &[usize],
+    strides_b: &[usize],
+    modes_b: &[i32],
+    shape_c: &[usize],
+    modes_c: &[i32],
+) -> Vec<A::Scalar>
+where
+    A::Scalar: crate::algebra::Scalar,
+{
+    // 1. Make inputs contiguous if needed
+    let a_contig = ensure_contiguous(a, shape_a, strides_a);
+    let b_contig = ensure_contiguous(b, shape_b, strides_b);
+
+    // 2. Classify modes
+    let (batch, left, right, contracted) = classify_modes(modes_a, modes_b, modes_c);
+
+    // 3. Compute dimension sizes
+    let batch_size = product_of_dims(&batch, modes_a, shape_a);
+    let left_size = product_of_dims(&left, modes_a, shape_a);
+    let right_size = product_of_dims(&right, modes_b, shape_b);
+    let contract_size = product_of_dims(&contracted, modes_a, shape_a);
+
+    // 4. Permute A to [batch, left, contracted]
+    let a_perm = compute_permutation(modes_a, &batch, &left, &contracted);
+    let a_permuted = permute_data(&a_contig, shape_a, &a_perm);
+
+    // 5. Permute B to [batch, contracted, right]
+    let b_perm = compute_permutation(modes_b, &batch, &contracted, &right);
+    let b_permuted = permute_data(&b_contig, shape_b, &b_perm);
+
+    // 6. Call GEMM
+    let c_data = if batch.is_empty() {
+        cpu.gemm_internal::<A>(&a_permuted, left_size, contract_size, &b_permuted, right_size)
+    } else {
+        cpu.gemm_batched_internal::<A>(
+            &a_permuted, batch_size, left_size, contract_size,
+            &b_permuted, right_size,
+        )
+    };
+
+    // 7. Permute result to output order
+    let current_order: Vec<i32> = batch.iter()
+        .chain(left.iter())
+        .chain(right.iter())
+        .copied()
+        .collect();
+
+    if current_order == modes_c {
+        c_data
+    } else {
+        let c_shape_current: Vec<usize> = current_order
+            .iter()
+            .map(|&m| shape_c[mode_position(modes_c, m)])
+            .collect();
+        let out_perm: Vec<usize> = modes_c
+            .iter()
+            .map(|m| current_order.iter().position(|x| x == m).unwrap())
+            .collect();
+        permute_data(&c_data, &c_shape_current, &out_perm)
+    }
+}
+
+/// Ensure data is contiguous (copy if strided).
+fn ensure_contiguous<T: Copy + Default>(
+    data: &[T],
+    shape: &[usize],
+    strides: &[usize],
+) -> Vec<T> {
+    let expected_strides = compute_contiguous_strides(shape);
+    if strides == expected_strides {
+        data.to_vec()
+    } else {
+        // Copy with stride handling
+        let numel: usize = shape.iter().product();
+        let mut result = vec![T::default(); numel];
+        copy_strided_to_contiguous(data, &mut result, shape, strides);
+        result
+    }
+}
+
+/// Copy strided data to contiguous buffer.
+fn copy_strided_to_contiguous<T: Copy>(
+    src: &[T],
+    dst: &mut [T],
+    shape: &[usize],
+    strides: &[usize],
+) {
+    let numel: usize = shape.iter().product();
+    let _dst_strides = compute_contiguous_strides(shape);
+
+    for i in 0..numel {
+        // Convert linear index to multi-index
+        let mut remaining = i;
+        let mut src_offset = 0;
+        for dim in 0..shape.len() {
+            let coord = remaining % shape[dim];
+            remaining /= shape[dim];
+            src_offset += coord * strides[dim];
+        }
+        dst[i] = src[src_offset];
+    }
+}
+
+/// Permute data according to axis permutation.
+fn permute_data<T: Copy + Default>(
+    data: &[T],
+    shape: &[usize],
+    perm: &[usize],
+) -> Vec<T> {
+    if perm.iter().enumerate().all(|(i, &p)| i == p) {
+        return data.to_vec(); // Already in correct order
+    }
+
+    let new_shape: Vec<usize> = perm.iter().map(|&p| shape[p]).collect();
+    let numel: usize = shape.iter().product();
+    let mut result = vec![T::default(); numel];
+
+    let old_strides = compute_contiguous_strides(shape);
+    let _new_strides = compute_contiguous_strides(&new_shape);
+
+    for new_idx in 0..numel {
+        // Convert new linear index to new multi-index
+        let mut remaining = new_idx;
+        let mut new_coords = vec![0; shape.len()];
+        for dim in 0..new_shape.len() {
+            new_coords[dim] = remaining % new_shape[dim];
+            remaining /= new_shape[dim];
+        }
+
+        // Map to old coordinates via inverse permutation
+        let mut old_idx = 0;
+        for (new_dim, &old_dim) in perm.iter().enumerate() {
+            old_idx += new_coords[new_dim] * old_strides[old_dim];
+        }
+
+        result[new_idx] = data[old_idx];
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

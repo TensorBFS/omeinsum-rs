@@ -10,6 +10,33 @@ use std::any::TypeId;
 #[derive(Clone, Debug, Default)]
 pub struct Cpu;
 
+impl Cpu {
+    /// Internal GEMM for contraction (not part of Backend trait).
+    pub(crate) fn gemm_internal<A: Algebra>(
+        &self,
+        a: &[A::Scalar],
+        m: usize,
+        k: usize,
+        b: &[A::Scalar],
+        n: usize,
+    ) -> Vec<A::Scalar> {
+        self.gemm::<A>(&a.to_vec(), m, k, &b.to_vec(), n)
+    }
+
+    /// Internal batched GEMM for contraction.
+    pub(crate) fn gemm_batched_internal<A: Algebra>(
+        &self,
+        a: &[A::Scalar],
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        b: &[A::Scalar],
+        n: usize,
+    ) -> Vec<A::Scalar> {
+        self.gemm_batched::<A>(&a.to_vec(), batch_size, m, k, &b.to_vec(), n)
+    }
+}
+
 impl<T: Scalar> Storage<T> for Vec<T> {
     #[inline]
     fn len(&self) -> usize {

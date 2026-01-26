@@ -236,6 +236,29 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         }
     }
 
+    /// Get element at linear index (column-major).
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Linear index into the flattened tensor
+    ///
+    /// # Panics
+    ///
+    /// Panics if index is out of bounds.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use omeinsum::{Tensor, Cpu};
+    ///
+    /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    /// assert_eq!(t.get(0), 1.0);
+    /// assert_eq!(t.get(3), 4.0);
+    /// ```
+    pub fn get(&self, index: usize) -> T {
+        self.to_vec()[index]
+    }
+
     // ========================================================================
     // View Operations (zero-copy)
     // ========================================================================
@@ -618,5 +641,36 @@ mod tests {
 
         assert_eq!(diag.shape(), &[3]);
         assert_eq!(diag.to_vec(), vec![1.0, 5.0, 9.0]);
+    }
+
+    #[test]
+    fn test_get() {
+        // Column-major: data [1, 2, 3, 4, 5, 6] for shape [2, 3] represents:
+        // [[1, 3, 5],
+        //  [2, 4, 6]]
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+        // Test accessing each element by linear index
+        assert_eq!(t.get(0), 1.0);
+        assert_eq!(t.get(1), 2.0);
+        assert_eq!(t.get(2), 3.0);
+        assert_eq!(t.get(3), 4.0);
+        assert_eq!(t.get(4), 5.0);
+        assert_eq!(t.get(5), 6.0);
+    }
+
+    #[test]
+    fn test_get_permuted() {
+        // Test that get works correctly on permuted (non-contiguous) tensors
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let p = t.permute(&[1, 0]); // Shape becomes [3, 2], non-contiguous
+
+        // After transpose, column-major data should be [1, 3, 5, 2, 4, 6]
+        assert_eq!(p.get(0), 1.0);
+        assert_eq!(p.get(1), 3.0);
+        assert_eq!(p.get(2), 5.0);
+        assert_eq!(p.get(3), 2.0);
+        assert_eq!(p.get(4), 4.0);
+        assert_eq!(p.get(5), 6.0);
     }
 }

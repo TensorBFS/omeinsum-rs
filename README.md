@@ -1,7 +1,7 @@
 # omeinsum-rs
 
 [![CI](https://github.com/TensorBFS/omeinsum-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TensorBFS/omeinsum-rs/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/TensorBFS/omeinsum-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/TensorBFS/omeinsum-rs)
+[![Coverage](https://img.shields.io/codecov/c/github/TensorBFS/omeinsum-rs)](https://codecov.io/gh/TensorBFS/omeinsum-rs)
 [![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://tensorbfs.github.io/omeinsum-rs/)
 
 Einstein summation for tropical and standard tensor networks in Rust. Inspired by [OMEinsum.jl](https://github.com/under-Peter/OMEinsum.jl).

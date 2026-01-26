@@ -220,7 +220,12 @@ impl Einsum<usize> {
         }
 
         if tensors.len() == 1 {
-            return self.execute_unary::<A, T, B>(tensors[0], &self.ixs[0]);
+            return execute_unary_naive::<A, T, B>(
+                tensors[0],
+                &self.ixs[0],
+                &self.iy,
+                &self.size_dict,
+            );
         }
 
         // Contract left to right
@@ -302,7 +307,12 @@ impl Einsum<usize> {
 
         if tensors.len() == 1 {
             // Single tensor: just trace/reduce if needed
-            return self.execute_unary::<A, T, B>(tensors[0], &self.ixs[0]);
+            return execute_unary_naive::<A, T, B>(
+                tensors[0],
+                &self.ixs[0],
+                &self.iy,
+                &self.size_dict,
+            );
         }
 
         // Contract left to right
@@ -332,71 +342,6 @@ impl Einsum<usize> {
         }
 
         result
-    }
-
-    /// Execute unary operation (trace/diagonal/reduction).
-    ///
-    /// Handles:
-    /// - Trace: `A[i,i] -> scalar` - sum of diagonal elements
-    /// - Diagonal: `A[i,i] -> B[i]` - extract diagonal
-    /// - Reduction: `A[i,j] -> B[i]` - sum over j
-    fn execute_unary<A, T, B>(&self, tensor: &Tensor<T, B>, ix: &[usize]) -> Tensor<T, B>
-    where
-        A: Algebra<Scalar = T>,
-        T: Scalar,
-        B: Backend + Default,
-    {
-        // Find repeated indices (for trace/diagonal)
-        let mut index_counts: HashMap<usize, usize> = HashMap::new();
-        for &i in ix {
-            *index_counts.entry(i).or_insert(0) += 1;
-        }
-
-        let repeated: Vec<usize> = index_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(&idx, _)| idx)
-            .collect();
-
-        // Find indices to sum over (in input but not in output)
-        let output_set: HashSet<_> = self.iy.iter().copied().collect();
-
-        // Handle repeated indices (trace/diagonal)
-        if !repeated.is_empty() && tensor.ndim() == 2 {
-            let diag = tensor.diagonal();
-            if self.iy.is_empty() {
-                // Trace: sum the diagonal
-                let sum = diag.sum::<A>();
-                return Tensor::from_data(&[sum], &[1]);
-            } else {
-                // Diagonal extraction
-                return diag;
-            }
-        }
-
-        // Handle reduction (sum over axes not in output)
-        // Find which axis positions need to be summed
-        let mut axes_to_sum: Vec<usize> = Vec::new();
-        for (axis, &idx) in ix.iter().enumerate() {
-            if !output_set.contains(&idx) {
-                axes_to_sum.push(axis);
-            }
-        }
-
-        if !axes_to_sum.is_empty() {
-            // Sum over axes from highest to lowest to maintain correct indexing
-            axes_to_sum.sort();
-            axes_to_sum.reverse();
-
-            let mut result = tensor.clone();
-            for axis in axes_to_sum {
-                result = result.sum_axis::<A>(axis);
-            }
-            return result;
-        }
-
-        // No operation needed, just return the tensor
-        tensor.clone()
     }
 }
 

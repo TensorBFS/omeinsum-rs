@@ -121,14 +121,21 @@ impl Einsum<usize> {
 
         match &self.optimized {
             Some(tree) => {
-                // Handle top-level Leaf (single tensor) specially to apply unary transformations
+                // Handle top-level Leaf specially
                 if let NestedEinsum::Leaf { tensor_index } = tree {
-                    execute_unary_naive::<A, T, B>(
-                        tensors[*tensor_index],
-                        &self.ixs[*tensor_index],
-                        &self.iy,
-                        &self.size_dict,
-                    )
+                    if tensors.len() == 1 {
+                        // Single tensor: apply unary transformation
+                        execute_unary_naive::<A, T, B>(
+                            tensors[*tensor_index],
+                            &self.ixs[*tensor_index],
+                            &self.iy,
+                            &self.size_dict,
+                        )
+                    } else {
+                        // Multiple tensors but optimizer returned Leaf (e.g., outer product)
+                        // Fall back to pairwise execution
+                        self.execute_pairwise::<A, T, B>(tensors)
+                    }
                 } else {
                     self.execute_tree::<A, T, B>(tree, tensors)
                 }
@@ -162,14 +169,21 @@ impl Einsum<usize> {
 
         let result = match &self.optimized {
             Some(tree) => {
-                // Handle top-level Leaf (single tensor) specially to apply unary transformations
+                // Handle top-level Leaf specially
                 if let NestedEinsum::Leaf { tensor_index } = tree {
-                    execute_unary_naive::<A, T, B>(
-                        tensors[*tensor_index],
-                        &self.ixs[*tensor_index],
-                        &self.iy,
-                        &self.size_dict,
-                    )
+                    if tensors.len() == 1 {
+                        // Single tensor: apply unary transformation
+                        execute_unary_naive::<A, T, B>(
+                            tensors[*tensor_index],
+                            &self.ixs[*tensor_index],
+                            &self.iy,
+                            &self.size_dict,
+                        )
+                    } else {
+                        // Multiple tensors but optimizer returned Leaf (e.g., outer product)
+                        // Fall back to pairwise execution
+                        self.execute_pairwise_with_argmax::<A, T, B>(tensors, &mut argmax_cache)
+                    }
                 } else {
                     self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache)
                 }
@@ -1135,5 +1149,60 @@ mod tests {
         assert!(output.contains(&0));
         assert!(output.contains(&2));
         assert!(!output.contains(&1));
+    }
+
+    #[test]
+    fn test_outer_product_pairwise() {
+        // Test outer product via pairwise path (no optimization)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0], &[2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[3.0, 4.0, 5.0], &[3]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let ein = Einsum::new(vec![vec![0], vec![1]], vec![0, 1], sizes);
+
+        // NOT optimized - uses pairwise path
+        assert!(!ein.is_optimized());
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b]);
+
+        assert_eq!(result.shape(), &[2, 3]);
+        // Outer product: a ⊗ b = [[1*3, 1*4, 1*5], [2*3, 2*4, 2*5]]
+        //                      = [[3, 4, 5], [6, 8, 10]]
+        // In column-major: [3, 6, 4, 8, 5, 10]
+        assert_eq!(result.to_vec(), vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);
+    }
+
+    #[test]
+    fn test_outer_product_optimized() {
+        // Test outer product with optimization
+        // The optimizer returns Leaf for outer products (no shared indices),
+        // but we detect this and fall back to pairwise execution
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0], &[2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[3.0, 4.0, 5.0], &[3]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let mut ein = Einsum::new(vec![vec![0], vec![1]], vec![0, 1], sizes);
+
+        ein.optimize_greedy();
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b]);
+
+        assert_eq!(result.shape(), &[2, 3]);
+        assert_eq!(result.to_vec(), vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);
+    }
+
+    #[test]
+    fn test_outer_product_with_argmax() {
+        // Test outer product through execute_with_argmax path
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0], &[2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[3.0, 4.0, 5.0], &[3]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let mut ein = Einsum::new(vec![vec![0], vec![1]], vec![0, 1], sizes);
+
+        ein.optimize_greedy();
+        let (result, _argmax_cache) =
+            ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a, &b]);
+
+        assert_eq!(result.shape(), &[2, 3]);
+        assert_eq!(result.to_vec(), vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);
     }
 }

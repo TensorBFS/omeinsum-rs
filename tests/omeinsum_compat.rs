@@ -438,7 +438,6 @@ fn test_sum_gradient() {
 }
 
 #[test]
-#[ignore = "Outer product via convenience function contracts indices incorrectly; use Einsum directly"]
 fn test_outer_product_gradient() {
     // Test gradient of outer product
     // Note: Outer products require explicit Einsum setup

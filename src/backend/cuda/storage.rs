@@ -1,6 +1,6 @@
 //! CUDA storage implementation for GPU memory management.
 
-use cudarc::driver::{CudaDevice, CudaSlice, DeviceRepr, DeviceSlice};
+use cudarc::driver::{CudaDevice, CudaSlice, DeviceRepr, DeviceSlice, DriverError};
 use std::sync::Arc;
 
 /// GPU memory storage backed by CUDA.
@@ -45,7 +45,11 @@ impl<T> CudaStorage<T> {
 
 impl<T: DeviceRepr + Clone> CudaStorage<T> {
     /// Copy all data from GPU to a Vec on the host.
-    pub fn to_vec(&self) -> Vec<T> {
-        self.device.dtoh_sync_copy(&self.slice).unwrap()
+    ///
+    /// # Errors
+    ///
+    /// Returns a `DriverError` if the CUDA device-to-host copy fails.
+    pub fn to_vec(&self) -> Result<Vec<T>, DriverError> {
+        self.device.dtoh_sync_copy(&self.slice)
     }
 }

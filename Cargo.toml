@@ -39,20 +39,20 @@ approx = "0.5"
 # Default: minimal, just Standard algebra
 default = []
 
-# Tropical algebra types (MaxPlus, MinPlus, MaxMul) - pure Rust generic implementation
-tropical = []
+# Tropical algebra types with optimized SIMD kernels
+tropical = ["dep:tropical-gemm"]
 
-# Optimized SIMD kernels for tropical operations (implies tropical)
-tropical-kernels = ["tropical", "tropical-gemm"]
+# Optimized SIMD kernels for tropical operations (kept for backward compatibility)
+tropical-kernels = ["tropical"]
 
 # Parallel execution
 parallel = ["rayon"]
 
-# CUDA backend (implies tropical-kernels)
-cuda = ["tropical-kernels", "tropical-gemm-cuda", "cudarc"]
+# CUDA backend
+cuda = ["dep:cudarc"]
 
 # Convenience: all features
-full = ["tropical-kernels", "parallel"]
+full = ["tropical", "cuda"]
 
 [[example]]
 name = "basic_einsum"

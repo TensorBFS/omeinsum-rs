@@ -14,4 +14,4 @@ pub use traits::{Backend, Storage};
 mod cuda;
 
 #[cfg(feature = "cuda")]
-pub use cuda::Cuda;
+pub use cuda::{Cuda, CudaError, CudaStorage};

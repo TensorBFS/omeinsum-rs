@@ -389,10 +389,8 @@ fn test_matmul_gradient() {
 }
 
 #[test]
-#[ignore = "Unary gradients not supported through convenience function"]
 fn test_trace_gradient() {
     // Test gradient of trace operation
-    // Note: Unary operations don't work with einsum_with_grad due to optimizer
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
     let (c, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
@@ -411,10 +409,8 @@ fn test_trace_gradient() {
 }
 
 #[test]
-#[ignore = "Unary gradients not supported through convenience function"]
 fn test_sum_gradient() {
     // Test gradient of sum operation
-    // Note: Unary operations don't work with einsum_with_grad due to optimizer
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
 
     let (c, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[]);
@@ -429,6 +425,52 @@ fn test_sum_gradient() {
     assert_eq!(grads.len(), 1);
     assert_eq!(grads[0].shape(), &[2, 3]);
     assert_eq!(grads[0].to_vec(), vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn test_sum_axis_gradient() {
+    // Test gradient of sum over one axis: ij->i
+    // Forward: sum over j (columns)
+    // Backward: broadcast along j
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+    let (c, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[0]);
+
+    // Row sums: [1+3+5, 2+4+6] = [9, 12] (col-major: column 0 is [1,2], etc.)
+    // Actually in col-major [2,3]: data is [[1,3,5],[2,4,6]]
+    // sum over j (axis 1): [1+3+5, 2+4+6] = [9, 12]
+    assert_eq!(c.to_vec(), vec![9.0, 12.0]);
+
+    // Backward: grad_y = [1, 1] broadcasts to all columns
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+    let grads = grad_fn.backward::<Standard<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    // Each element gets gradient 1 (broadcast from its row's gradient)
+    assert_eq!(grads[0].to_vec(), vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn test_diagonal_extract_gradient() {
+    // Test gradient of diagonal extraction: ii->i
+    // Forward: extract diagonal
+    // Backward: embed to diagonal
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+    let (c, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[0]);
+
+    // Diagonal elements: [1, 4] (positions (0,0) and (1,1))
+    assert_eq!(c.to_vec(), vec![1.0, 4.0]);
+
+    // Backward: grad_y = [1, 1] embeds to diagonal
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+    let grads = grad_fn.backward::<Standard<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    // Only diagonal gets gradient: [[1,0],[0,1]] in col-major: [1, 0, 0, 1]
+    assert_eq!(grads[0].to_vec(), vec![1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]

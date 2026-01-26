@@ -68,7 +68,7 @@ where
     let size_dict = infer_size_dict(tensors, ixs);
     let ixs_owned: Vec<Vec<usize>> = ixs.iter().map(|ix| ix.to_vec()).collect();
 
-    let mut ein = Einsum::new(ixs_owned.clone(), iy.to_vec(), size_dict);
+    let mut ein = Einsum::new(ixs_owned.clone(), iy.to_vec(), size_dict.clone());
     ein.optimize_greedy();
 
     // Only track argmax for algebras that need it (tropical algebras)
@@ -82,6 +82,7 @@ where
     let gradient = EinsumGradient {
         ixs: ixs_owned,
         iy: iy.to_vec(),
+        size_dict,
         argmax_cache,
         _phantom: std::marker::PhantomData,
     };
@@ -93,11 +94,12 @@ where
 pub struct EinsumGradient<T: Scalar, B: Backend> {
     ixs: Vec<Vec<usize>>,
     iy: Vec<usize>,
+    size_dict: std::collections::HashMap<usize, usize>,
     argmax_cache: Vec<Tensor<u32, B>>,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Scalar, B: Backend> EinsumGradient<T, B> {
+impl<T: Scalar, B: Backend + Default> EinsumGradient<T, B> {
     /// Compute gradients for all inputs given the output gradient.
     ///
     /// # Arguments
@@ -121,9 +123,26 @@ impl<T: Scalar, B: Backend> EinsumGradient<T, B> {
             self.ixs.len()
         );
 
-        // Handle single input case: gradient passes through unchanged
+        // Handle single input case: use index-exchange trick
+        // Forward: y = einsum(ix -> iy, x)
+        // Backward: grad_x = einsum(iy -> ix, grad_y)
+        //
+        // Note: This only works for standard algebra. Tropical algebras need
+        // argmax routing which requires tracking winners during forward pass.
         if inputs.len() == 1 {
-            return vec![grad_output.clone()];
+            if A::needs_argmax() {
+                unimplemented!(
+                    "Unary backward for tropical algebras not yet implemented. \
+                     Requires argmax tracking during forward pass."
+                );
+            }
+            let grad_x = backward::contract_unary_backward::<A, T, B>(
+                grad_output,
+                &self.ixs[0],
+                &self.iy,
+                &self.size_dict,
+            );
+            return vec![grad_x];
         }
 
         // For a single binary contraction (2 inputs), we can directly compute gradients

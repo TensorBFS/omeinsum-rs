@@ -459,7 +459,7 @@ fn compute_input_position(
 /// to index label `1`. This automatically handles diagonal extraction because
 /// `compute_input_position` uses `idx_values[&idx]` - when the same index label
 /// appears multiple times in `ix`, those positions will use the same value.
-fn execute_unary_naive<A, T, B>(
+pub(crate) fn execute_unary_naive<A, T, B>(
     tensor: &Tensor<T, B>,
     ix: &[usize],
     iy: &[usize],
@@ -500,11 +500,27 @@ where
         let out_multi = linear_to_multi(out_linear, &out_shape);
 
         // Map: outer index label -> value
-        let mut idx_values: HashMap<usize, usize> = outer
-            .iter()
-            .zip(out_multi.iter())
-            .map(|(&idx, &val)| (idx, val))
-            .collect();
+        // For repeated output indices (like `ii`), check consistency
+        let mut idx_values: HashMap<usize, usize> = HashMap::new();
+        let mut skip_position = false;
+
+        for (&idx, &val) in outer.iter().zip(out_multi.iter()) {
+            if let Some(&existing) = idx_values.get(&idx) {
+                // Repeated index label - values must match
+                if existing != val {
+                    skip_position = true;
+                    break;
+                }
+            } else {
+                idx_values.insert(idx, val);
+            }
+        }
+
+        // Skip non-diagonal positions for repeated output indices
+        if skip_position {
+            // out_data[out_linear] is already zero
+            continue;
+        }
 
         // 6. Accumulate over inner indices
         let mut acc = A::zero();

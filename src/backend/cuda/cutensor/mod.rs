@@ -4,6 +4,9 @@
 //! high-performance tensor contractions on CUDA GPUs.
 
 pub mod sys;
+mod handle;
+
+pub use handle::{CutensorType, Handle, Plan, TensorDesc};
 
 use sys::cutensorStatus_t;
 

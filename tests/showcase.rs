@@ -49,8 +49,7 @@ fn test_bayesian_network_marginals() {
     // We'll do it in steps since einsum_with_grad only supports 2 tensors currently
 
     // Step 1: Contract φ₀ with ψ₀₁: result[j] = Σᵢ φ₀[i] × ψ₀₁[i,j]
-    let (t1, _) =
-        einsum_with_grad::<Standard<f64>, _, _>(&[&phi0, &psi01], &[&[0], &[0, 1]], &[1]);
+    let t1 = einsum::<Standard<f64>, _, _>(&[&phi0, &psi01], &[&[0], &[0, 1]], &[1]);
 
     // Step 2: Contract t1 with φ₁ (element-wise multiply then reduce to scalar...
     // Actually we need to keep index for further contraction)
@@ -98,13 +97,61 @@ fn test_bayesian_network_marginals() {
     assert!((p_x1_eq_1 - 45.0/57.0).abs() < eps,
             "P(X₁=1) should be 45/57 ≈ 0.789, got {}", p_x1_eq_1);
 
-    // The gradient insight: ∂Z/∂φ₁[1] = sum of weights where X₁=1, divided by φ₁[1]=3
-    // So ∂Z/∂φ₁[1] = sum_x1_eq_1 / 3 = 45/3 = 15
-    // And P(X₁=1) = (φ₁[1]/Z) × ∂Z/∂φ₁[1] = (3/57) × 15 = 45/57 ✓
+    // =========================================================================
+    // Gradient Computation: Demonstrate that differentiation = marginalization
+    // =========================================================================
+    //
+    // For a simple 2-tensor contraction, compute the gradient and verify.
+    // Contract φ₀ with ψ₀₁: result[j] = Σᵢ φ₀[i] × ψ₀₁[i,j]
+    //
+    // Gradient with respect to φ₀: ∂result[j]/∂φ₀[i] = ψ₀₁[i,j]
+    // Gradient with respect to ψ₀₁: ∂result[j]/∂ψ₀₁[i,j] = φ₀[i]
+    //
+    // If we have grad_output = [1, 1] (ones), then:
+    // grad_φ₀[i] = Σⱼ ψ₀₁[i,j] = row sums of ψ₀₁
+    // grad_ψ₀₁[i,j] = φ₀[i] (broadcast)
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<f64>, _, _>(&[&phi0, &psi01], &[&[0], &[0, 1]], &[1]);
+
+    // result[j] = Σᵢ φ₀[i] × ψ₀₁[i,j]
+    // result[0] = φ₀[0]×ψ[0,0] + φ₀[1]×ψ[1,0] = 1×2 + 2×1 = 4
+    // result[1] = φ₀[0]×ψ[0,1] + φ₀[1]×ψ[1,1] = 1×1 + 2×2 = 5
+    let result_vec = result.to_vec();
+    assert!((result_vec[0] - 4.0).abs() < eps, "result[0] should be 4, got {}", result_vec[0]);
+    assert!((result_vec[1] - 5.0).abs() < eps, "result[1] should be 5, got {}", result_vec[1]);
+
+    // Compute gradients with grad_output = [1, 1]
+    let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+    let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&phi0, &psi01]);
+
+    // Verify gradient of φ₀:
+    // grad_φ₀[i] = Σⱼ grad_output[j] × ψ₀₁[i,j]
+    // grad_φ₀[0] = 1×2 + 1×1 = 3 (row sum of row 0)
+    // grad_φ₀[1] = 1×1 + 1×2 = 3 (row sum of row 1)
+    let grad_phi0 = grads[0].to_vec();
+    assert!((grad_phi0[0] - 3.0).abs() < eps,
+            "grad_φ₀[0] should be 3, got {}", grad_phi0[0]);
+    assert!((grad_phi0[1] - 3.0).abs() < eps,
+            "grad_φ₀[1] should be 3, got {}", grad_phi0[1]);
+
+    // Verify gradient of ψ₀₁:
+    // grad_ψ₀₁[i,j] = grad_output[j] × φ₀[i]
+    // Column-major layout: [grad[0,0], grad[1,0], grad[0,1], grad[1,1]]
+    //                    = [1×1, 2×1, 1×1, 2×1] = [1, 2, 1, 2]
+    let grad_psi01 = grads[1].to_vec();
+    let expected_grad_psi = [1.0, 2.0, 1.0, 2.0];
+    for (i, (&got, &expected)) in grad_psi01.iter().zip(expected_grad_psi.iter()).enumerate() {
+        assert!((got - expected).abs() < eps,
+                "grad_ψ₀₁[{}] should be {}, got {}", i, expected, got);
+    }
 
     println!("Bayesian Network Marginals Test:");
     println!("  Z = {} (expected 57)", z);
     println!("  P(X₁=1) = {:.4} (expected {:.4})", p_x1_eq_1, 45.0/57.0);
+    println!("  Forward result: {:?}", result_vec);
+    println!("  Gradient of φ₀: {:?} (expected [3, 3])", grad_phi0);
+    println!("  Gradient of ψ₀₁: {:?} (expected [1, 2, 1, 2])", grad_psi01);
     println!("  Gradient insight: differentiation = marginalization ✓");
 }
 
@@ -117,95 +164,136 @@ fn test_bayesian_network_marginals() {
 
 /// Test complex tensor contraction for MPS-like structure.
 ///
-/// This is a simplified version showing that complex einsum works.
-/// Full variational optimization would require iterative updates.
+/// This demonstrates complex einsum with non-trivial imaginary components.
+/// The test verifies both forward computation and specific numerical values.
 #[test]
 fn test_tensor_train_complex_contraction() {
     use num_complex::Complex64 as C64;
 
-    // Simple 3-site MPS contraction (simpler than full 5-site for test)
-    // |ψ⟩ = Σ_{s₁,s₂,s₃} A¹[s₁] · A²[s₂] · A³[s₃] |s₁s₂s₃⟩
+    // Simple 2-tensor complex contraction demonstrating quantum-like computation.
+    // We use non-zero imaginary parts to properly test complex arithmetic.
     //
-    // For simplicity: bond dimension χ=2, physical dimension d=2
+    // Physical interpretation: two-site MPS-like contraction
+    // |ψ⟩ = Σ_{s₁,s₂} A¹[s₁] · A²[s₂] |s₁s₂⟩
 
-    // A1: shape [1, 2, 2] - left boundary (χ_left=1, d=2, χ_right=2)
-    // In our einsum: indices [a, s1, b] where a=1, s1=2, b=2
-    // Flatten to 4 elements (1×2×2)
+    // A1: shape [2, 2] - maps physical index s1 to bond index b
+    // Using complex values with non-zero imaginary parts
+    // Row 0 (s1=0): [1+i, 0]
+    // Row 1 (s1=1): [0, 1-i]
+    // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]] = [1+i, 0, 0, 1-i]
     let a1 = Tensor::<C64, Cpu>::from_data(
         &[
-            C64::new(1.0, 0.0), C64::new(0.0, 0.0),  // s1=0: [1, 0]
-            C64::new(0.0, 0.0), C64::new(1.0, 0.0),  // s1=1: [0, 1]
+            C64::new(1.0, 1.0),   // A[0,0] = 1+i
+            C64::new(0.0, 0.0),   // A[1,0] = 0
+            C64::new(0.0, 0.0),   // A[0,1] = 0
+            C64::new(1.0, -1.0),  // A[1,1] = 1-i
         ],
-        &[1, 2, 2],
+        &[2, 2],
     );
 
-    // A2: shape [2, 2, 2] - bulk (χ_left=2, d=2, χ_right=2)
+    // A2: shape [2, 2] - maps bond index b to physical index s2
+    // Row 0 (b=0): [2, i]
+    // Row 1 (b=1): [-i, 3]
+    // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]] = [2, -i, i, 3]
     let a2 = Tensor::<C64, Cpu>::from_data(
         &[
-            // a=0, s2=0: [1, 0]
-            C64::new(1.0, 0.0), C64::new(0.0, 0.0),
-            // a=1, s2=0: [0, 1]
-            C64::new(0.0, 0.0), C64::new(1.0, 0.0),
-            // a=0, s2=1: [0, 1]
-            C64::new(0.0, 0.0), C64::new(1.0, 0.0),
-            // a=1, s2=1: [1, 0]
-            C64::new(1.0, 0.0), C64::new(0.0, 0.0),
+            C64::new(2.0, 0.0),   // A[0,0] = 2
+            C64::new(0.0, -1.0),  // A[1,0] = -i
+            C64::new(0.0, 1.0),   // A[0,1] = i
+            C64::new(3.0, 0.0),   // A[1,1] = 3
         ],
-        &[2, 2, 2],
+        &[2, 2],
     );
 
-    // A3: shape [2, 2, 1] - right boundary
-    let a3 = Tensor::<C64, Cpu>::from_data(
-        &[
-            C64::new(1.0, 0.0), C64::new(0.0, 0.0),  // s3=0
-            C64::new(0.0, 0.0), C64::new(1.0, 0.0),  // s3=1
-        ],
-        &[2, 2, 1],
-    );
+    // Contract A1 with A2: result[s1, s2] = Σ_b A1[s1,b] × A2[b,s2]
+    // This is a standard matrix multiplication in complex arithmetic.
+    //
+    // Manual calculation:
+    // result[0,0] = A1[0,0]×A2[0,0] + A1[0,1]×A2[1,0] = (1+i)×2 + 0×(-i) = 2+2i
+    // result[0,1] = A1[0,0]×A2[0,1] + A1[0,1]×A2[1,1] = (1+i)×i + 0×3 = i+i² = i-1 = -1+i
+    // result[1,0] = A1[1,0]×A2[0,0] + A1[1,1]×A2[1,0] = 0×2 + (1-i)×(-i) = -i+i² = -i-1 = -1-i
+    // result[1,1] = A1[1,0]×A2[0,1] + A1[1,1]×A2[1,1] = 0×i + (1-i)×3 = 3-3i
 
-    // Contract A1 with A2: result[a, s1, s2, c] = Σ_b A1[a,s1,b] × A2[b,s2,c]
-    // A1 has shape [1, 2, 2] with indices [a, s1, b]
-    // A2 has shape [2, 2, 2] with indices [b, s2, c]
-    // Contract over b, keep a, s1, s2, c
-    let t12 = einsum::<Standard<C64>, _, _>(
+    let result = einsum::<Standard<C64>, _, _>(
         &[&a1, &a2],
-        &[&[0, 1, 2], &[2, 3, 4]],  // a=0, s1=1, b=2; b=2, s2=3, c=4
-        &[0, 1, 3, 4],                // output: a, s1, s2, c
+        &[&[0, 1], &[1, 2]],  // s1=0, b=1, s2=2; contract over b
+        &[0, 2],               // output: [s1, s2]
     );
 
-    // Shape: [1, 2, 2, 2] - includes the bond dimension a=1
-    assert_eq!(t12.shape(), &[1, 2, 2, 2]);
+    assert_eq!(result.shape(), &[2, 2]);
 
-    // Contract result with A3: ψ[a, s1, s2, s3, d] = Σ_c t12[a,s1,s2,c] × A3[c,s3,d]
-    // A3 has shape [2, 2, 1] with indices [c, s3, d]
-    let psi = einsum::<Standard<C64>, _, _>(
-        &[&t12, &a3],
-        &[&[0, 1, 2, 3], &[3, 4, 5]],  // a=0, s1=1, s2=2, c=3; c=3, s3=4, d=5
-        &[0, 1, 2, 4, 5],               // output: a, s1, s2, s3, d
+    // Verify specific complex values (column-major order)
+    let result_vec = result.to_vec();
+    let eps = 1e-10;
+
+    // Column-major: [result[0,0], result[1,0], result[0,1], result[1,1]]
+    let expected = [
+        C64::new(2.0, 2.0),    // result[0,0] = 2+2i
+        C64::new(-1.0, -1.0),  // result[1,0] = -1-i
+        C64::new(-1.0, 1.0),   // result[0,1] = -1+i
+        C64::new(3.0, -3.0),   // result[1,1] = 3-3i
+    ];
+
+    for (i, (got, exp)) in result_vec.iter().zip(expected.iter()).enumerate() {
+        assert!((got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
+                "result[{}] mismatch: got {:?}, expected {:?}", i, got, exp);
+    }
+
+    // Compute norm ⟨ψ|ψ⟩ = Σ_{s1,s2} |ψ[s1,s2]|²
+    let norm_sq: f64 = result_vec.iter().map(|c| c.norm_sqr()).sum();
+
+    // Manual: |2+2i|² + |-1-i|² + |-1+i|² + |3-3i|² = 8 + 2 + 2 + 18 = 30
+    assert!((norm_sq - 30.0).abs() < eps, "Norm² should be 30, got {}", norm_sq);
+
+    // Test einsum_with_grad for complex tensors
+    let (result2, grad_fn) = einsum_with_grad::<Standard<C64>, _, _>(
+        &[&a1, &a2],
+        &[&[0, 1], &[1, 2]],
+        &[0, 2],
     );
 
-    // Shape: [1, 2, 2, 2, 1] - full MPS with boundary dimensions
-    assert_eq!(psi.shape(), &[1, 2, 2, 2, 1]);
+    // Verify forward pass gives same result
+    let result2_vec = result2.to_vec();
+    for (i, (got, exp)) in result2_vec.iter().zip(expected.iter()).enumerate() {
+        assert!((got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
+                "einsum_with_grad result[{}] mismatch", i);
+    }
 
-    // Compute norm ⟨ψ|ψ⟩ = Σ_{s1,s2,s3} |ψ[a,s1,s2,s3,d]|²
-    // (a and d are singleton dimensions)
-    let psi_vec = psi.to_vec();
-    let norm_sq: f64 = psi_vec.iter().map(|c| c.norm_sqr()).sum();
+    // Compute gradient with grad_output = all ones (complex)
+    let grad_output = Tensor::<C64, Cpu>::from_data(
+        &[C64::new(1.0, 0.0), C64::new(1.0, 0.0), C64::new(1.0, 0.0), C64::new(1.0, 0.0)],
+        &[2, 2],
+    );
+    let grads = grad_fn.backward::<Standard<C64>>(&grad_output, &[&a1, &a2]);
+
+    // grad_A1[s1,b] = Σ_{s2} grad_output[s1,s2] × A2[b,s2]
+    // grad_A1[0,0] = 1×A2[0,0] + 1×A2[0,1] = 2 + i = 2+i
+    // grad_A1[0,1] = 1×A2[1,0] + 1×A2[1,1] = -i + 3 = 3-i
+    // grad_A1[1,0] = 1×A2[0,0] + 1×A2[0,1] = 2 + i = 2+i
+    // grad_A1[1,1] = 1×A2[1,0] + 1×A2[1,1] = -i + 3 = 3-i
+    // Column-major: [2+i, 2+i, 3-i, 3-i]
+
+    let grad_a1 = grads[0].to_vec();
+    let expected_grad_a1 = [
+        C64::new(2.0, 1.0),   // grad_A1[0,0]
+        C64::new(2.0, 1.0),   // grad_A1[1,0]
+        C64::new(3.0, -1.0),  // grad_A1[0,1]
+        C64::new(3.0, -1.0),  // grad_A1[1,1]
+    ];
+
+    for (i, (got, exp)) in grad_a1.iter().zip(expected_grad_a1.iter()).enumerate() {
+        assert!((got.re - exp.re).abs() < eps && (got.im - exp.im).abs() < eps,
+                "grad_A1[{}] mismatch: got {:?}, expected {:?}", i, got, exp);
+    }
 
     println!("Tensor Train Complex Contraction Test:");
-    println!("  MPS tensors: A1[1,2,2] × A2[2,2,2] × A3[2,2,1]");
-    println!("  Contracted ψ shape: {:?}", psi.shape());
-    println!("  ⟨ψ|ψ⟩ = {:.4}", norm_sq);
-    println!("  Complex einsum working ✓");
-
-    // For a proper ground state test, we would:
-    // 1. Define Heisenberg Hamiltonian h₁₂
-    // 2. Compute E = ⟨ψ|H|ψ⟩/⟨ψ|ψ⟩
-    // 3. Use einsum_with_grad to get ∂E/∂A
-    // 4. Update A tensors via gradient descent
-    // 5. Verify E converges to exact ground state energy
-
-    assert!(norm_sq > 0.0, "Norm should be positive");
+    println!("  A1[2,2] × A2[2,2] with complex values");
+    println!("  A1 has values like 1+i, 1-i");
+    println!("  A2 has values like 2, i, -i, 3");
+    println!("  Result: {:?}", result_vec);
+    println!("  ⟨ψ|ψ⟩ = {:.4} (expected 30)", norm_sq);
+    println!("  Gradient of A1: {:?}", grad_a1);
+    println!("  Complex einsum with gradients working ✓");
 }
 
 // ============================================================================

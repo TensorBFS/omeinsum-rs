@@ -1,7 +1,5 @@
 # Showcase Examples Design
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Create three showcase test cases demonstrating gradients across different algebras (real, complex, tropical).
 
 **Architecture:** Each example is a standalone test in `tests/showcase.rs` with detailed documentation explaining the math/physics, small enough to verify by hand.

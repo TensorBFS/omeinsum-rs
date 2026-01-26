@@ -989,4 +989,23 @@ mod tests {
         assert_eq!(result.shape(), &[1]);
         assert_eq!(result.to_vec()[0], 4.0);
     }
+
+    #[test]
+    fn test_einsum_trace_optimized() {
+        // Test that the optimized path correctly handles unary trace operations
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        // Optimize and execute
+        ein.optimize_greedy();
+        assert!(ein.is_optimized());
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = A[0,0] + A[1,1] = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
 }

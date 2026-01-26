@@ -469,6 +469,97 @@ fn compute_input_position(
     pos
 }
 
+/// Execute unary einsum operation using naive loop.
+/// Handles trace, diagonal, sum, permutation uniformly.
+///
+/// # Type Parameters
+///
+/// * `A` - The algebra to use for accumulation
+/// * `T` - The scalar type
+/// * `B` - The backend type
+///
+/// # Arguments
+///
+/// * `tensor` - The input tensor
+/// * `ix` - Input index labels (may contain repeated indices for trace/diagonal)
+/// * `iy` - Output index labels
+/// * `size_dict` - Mapping from index labels to dimension sizes
+///
+/// # Key Insight
+///
+/// For repeated indices like `ix = [0, 1, 1, 2]` (ijjk), positions 1 and 2 both map
+/// to index label `1`. This automatically handles diagonal extraction because
+/// `compute_input_position` uses `idx_values[&idx]` - when the same index label
+/// appears multiple times in `ix`, those positions will use the same value.
+fn execute_unary_naive<A, T, B>(
+    tensor: &Tensor<T, B>,
+    ix: &[usize],
+    iy: &[usize],
+    size_dict: &HashMap<usize, usize>,
+) -> Tensor<T, B>
+where
+    A: Algebra<Scalar = T>,
+    T: Scalar,
+    B: Backend + Default,
+{
+    // 1. Classify indices
+    // outer = output indices
+    // inner = indices that appear in input but not in output (summed over)
+    let outer: &[usize] = iy;
+    let outer_set: HashSet<usize> = outer.iter().copied().collect();
+    let inner_vec: Vec<usize> = ix
+        .iter()
+        .copied()
+        .filter(|i| !outer_set.contains(i))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // 2. Build output shape
+    let out_shape: Vec<usize> = outer.iter().map(|&idx| size_dict[&idx]).collect();
+    let out_size = out_shape.iter().product::<usize>().max(1);
+
+    // 3. Build inner ranges (dimensions to sum over)
+    let inner_ranges: Vec<usize> = inner_vec.iter().map(|&idx| size_dict[&idx]).collect();
+    let inner_size = inner_ranges.iter().product::<usize>().max(1);
+
+    // 4. Allocate output
+    let mut out_data = vec![A::zero().to_scalar(); out_size];
+
+    // 5. Loop over output positions
+    for out_linear in 0..out_size {
+        let out_multi = linear_to_multi(out_linear, &out_shape);
+
+        // Map: outer index label -> value
+        let mut idx_values: HashMap<usize, usize> = outer
+            .iter()
+            .zip(out_multi.iter())
+            .map(|(&idx, &val)| (idx, val))
+            .collect();
+
+        // 6. Accumulate over inner indices
+        let mut acc = A::zero();
+        for inner_linear in 0..inner_size {
+            let inner_multi = linear_to_multi(inner_linear, &inner_ranges);
+            for (&idx, &val) in inner_vec.iter().zip(inner_multi.iter()) {
+                idx_values.insert(idx, val);
+            }
+
+            // 7. Compute input position and accumulate
+            let in_pos = compute_input_position(ix, &idx_values, tensor.shape());
+            acc = acc.add(A::from_scalar(tensor.get(in_pos)));
+        }
+
+        out_data[out_linear] = acc.to_scalar();
+    }
+
+    if out_shape.is_empty() {
+        Tensor::from_data(&out_data, &[1])
+    } else {
+        Tensor::from_data(&out_data, &out_shape)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -760,5 +851,185 @@ mod tests {
                 linear, multi
             );
         }
+    }
+
+    // ========================================================================
+    // Tests for execute_unary_naive
+    // ========================================================================
+
+    #[test]
+    fn test_unary_naive_transpose() {
+        // Transpose: A[i,j] -> B[j,i]
+        // Input matrix (column-major): [[1, 3], [2, 4]]
+        // data = [1, 2, 3, 4], shape = [2, 2]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![1, 0]; // B[j,i]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // After transpose: [[1, 2], [3, 4]] in column-major = [1, 3, 2, 4]
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), vec![1.0, 3.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_trace() {
+        // Trace: A[i,i] -> scalar (sum of diagonal)
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        // data = [1, 2, 3, 4], shape = [2, 2]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2)].into();
+        let ix = vec![0, 0]; // A[i,i] - repeated index means diagonal
+        let iy = vec![]; // scalar output
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // trace = A[0,0] + A[1,1] = 1 + 4 = 5
+        assert_eq!(result.shape(), &[1]);
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_unary_naive_diagonal() {
+        // Diagonal extraction: A[i,i] -> B[i]
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2)].into();
+        let ix = vec![0, 0]; // A[i,i] - repeated index
+        let iy = vec![0]; // output B[i]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // diagonal = [A[0,0], A[1,1]] = [1, 4]
+        assert_eq!(result.shape(), &[2]);
+        assert_eq!(result.to_vec(), vec![1.0, 4.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_sum_axis() {
+        // Sum over axis: A[i,j] -> B[i] (sum over j)
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![0]; // B[i] - j is summed out
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // sum over j: B[i] = sum_j A[i,j]
+        // B[0] = A[0,0] + A[0,1] = 1 + 3 = 4
+        // B[1] = A[1,0] + A[1,1] = 2 + 4 = 6
+        assert_eq!(result.shape(), &[2]);
+        assert_eq!(result.to_vec(), vec![4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_sum_all() {
+        // Sum all: A[i,j] -> scalar
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![]; // scalar output
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // sum all = 1 + 2 + 3 + 4 = 10
+        assert_eq!(result.shape(), &[1]);
+        assert_eq!(result.to_vec()[0], 10.0);
+    }
+
+    #[test]
+    fn test_unary_naive_partial_trace() {
+        // Partial trace: A[i,j,i] -> B[j] (trace over i, keeping j)
+        // 3D tensor with shape [2, 3, 2]
+        // This is like having a batch of 2x2 matrices and taking the trace of each
+        let data: Vec<f32> = (1..=12).map(|x| x as f32).collect();
+        let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 3, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let ix = vec![0, 1, 0]; // A[i,j,i] - i is repeated at positions 0 and 2
+        let iy = vec![1]; // B[j] - output keeps only j
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // For each j, we sum A[0,j,0] + A[1,j,1]
+        // Column-major layout: data[i + j*2 + k*6]
+        // j=0: A[0,0,0] + A[1,0,1] = data[0] + data[1+0*2+1*6] = data[0] + data[7] = 1 + 8 = 9
+        // j=1: A[0,1,0] + A[1,1,1] = data[0+1*2+0*6] + data[1+1*2+1*6] = data[2] + data[9] = 3 + 10 = 13
+        // j=2: A[0,2,0] + A[1,2,1] = data[0+2*2+0*6] + data[1+2*2+1*6] = data[4] + data[11] = 5 + 12 = 17
+        assert_eq!(result.shape(), &[3]);
+        assert_eq!(result.to_vec(), vec![9.0, 13.0, 17.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_3d_transpose() {
+        // 3D permutation: A[i,j,k] -> B[k,i,j]
+        let data: Vec<f32> = (1..=8).map(|x| x as f32).collect();
+        let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let ix = vec![0, 1, 2]; // A[i,j,k]
+        let iy = vec![2, 0, 1]; // B[k,i,j]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        assert_eq!(result.shape(), &[2, 2, 2]);
+
+        // Verify by checking specific elements
+        // B[k,i,j] = A[i,j,k]
+        // Build expected output manually
+        let mut expected = vec![0.0f32; 8];
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    // A[i,j,k] at position i + j*2 + k*4 in column-major
+                    let a_pos = i + j * 2 + k * 4;
+                    // B[k,i,j] at position k + i*2 + j*4 in column-major
+                    let b_pos = k + i * 2 + j * 4;
+                    expected[b_pos] = data[a_pos];
+                }
+            }
+        }
+        assert_eq!(result.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_unary_naive_identity() {
+        // Identity: A[i,j] -> B[i,j] (no change)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![0, 1]; // B[i,j]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), a.to_vec());
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_unary_naive_trace_tropical() {
+        // Trace with max-plus algebra: A[i,i] -> scalar
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2)].into();
+        let ix = vec![0, 0]; // A[i,i]
+        let iy = vec![]; // scalar output
+
+        let result = execute_unary_naive::<MaxPlus<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // tropical trace = max(A[0,0], A[1,1]) = max(1, 4) = 4
+        assert_eq!(result.shape(), &[1]);
+        assert_eq!(result.to_vec()[0], 4.0);
     }
 }

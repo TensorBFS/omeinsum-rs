@@ -19,7 +19,7 @@ num-complex = { version = "0.4", features = ["bytemuck"] }
 faer = "0.23"
 
 # Contraction order optimization
-omeco = { git = "https://github.com/GiggleLiu/omeco", branch = "fix-outer-product-optimization" }
+omeco = "0.2"
 
 # Optional: Tropical algebra support (v0.2+ for column-major)
 tropical-gemm = { version = "0.2", optional = true }

@@ -67,6 +67,53 @@ pub trait Backend: Clone + Send + Sync + 'static {
         offset: usize,
     ) -> Self::Storage<T>;
 
+    /// Binary tensor contraction.
+    ///
+    /// Computes: C[modes_c] = Σ A[modes_a] ⊗ B[modes_b]
+    /// where the sum is over indices appearing in both A and B but not in C.
+    ///
+    /// # Arguments
+    /// * `a`, `b` - Input tensor storage
+    /// * `shape_a`, `shape_b` - Tensor shapes
+    /// * `strides_a`, `strides_b` - Tensor strides (for non-contiguous support)
+    /// * `modes_a`, `modes_b` - Index labels for each tensor dimension
+    /// * `shape_c`, `modes_c` - Output shape and index labels
+    fn contract<A: Algebra>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
+        b: &Self::Storage<A::Scalar>,
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
+    ) -> Self::Storage<A::Scalar>
+    where
+        A::Scalar: BackendScalar<Self>;
+
+    /// Contraction with argmax tracking for tropical backpropagation.
+    ///
+    /// Returns (result, argmax) where argmax contains the index that "won"
+    /// the reduction at each output position.
+    fn contract_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
+        b: &Self::Storage<A::Scalar>,
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
+    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>)
+    where
+        A::Scalar: BackendScalar<Self>;
+
     /// General matrix multiplication.
     ///
     /// Computes C = A ⊗ B where ⊗ is the semiring multiplication

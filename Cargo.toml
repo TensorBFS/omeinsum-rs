@@ -14,14 +14,17 @@ categories = ["science", "mathematics"]
 num-traits = "0.2"
 bytemuck = { version = "1.14", features = ["derive"] }
 
+# High-performance GEMM for Standard algebra
+faer = "0.23"
+
 # Contraction order optimization
 omeco = "0.2"
 
-# Optional: Tropical algebra support
-tropical-gemm = { path = "../tropical-gemm/crates/tropical-gemm", optional = true }
+# Optional: Tropical algebra support (v0.2+ for column-major)
+tropical-gemm = { version = "0.2", optional = true }
 
 # Optional: CUDA support
-tropical-gemm-cuda = { path = "../tropical-gemm/crates/tropical-gemm-cuda", optional = true }
+tropical-gemm-cuda = { version = "0.2", optional = true }
 cudarc = { version = "0.12", optional = true }
 
 # Optional: Parallelism

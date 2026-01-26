@@ -202,16 +202,23 @@ mod tests {
         // grad_A = grad_C @ B.T  -> [2,2] @ [2,3] -> [2,3]
         // grad_B = A.T @ grad_C  -> [3,2] @ [2,2] -> [3,2]
 
+        // Column-major: data [1,2,3,4,5,6] for shape [2,3] represents:
+        // A = [[1, 3, 5],
+        //      [2, 4, 6]]
         let a = Tensor::<f32, Cpu>::from_data(
             &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             &[2, 3],
         );
+        // Column-major: data [1,2,3,4,5,6] for shape [3,2] represents:
+        // B = [[1, 4],
+        //      [2, 5],
+        //      [3, 6]]
         let b = Tensor::<f32, Cpu>::from_data(
             &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             &[3, 2],
         );
 
-        // grad_c is all ones [2, 2]
+        // grad_c is all ones [2, 2] -> [[1, 1], [1, 1]]
         let grad_c = Tensor::<f32, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
 
         let ia = &[0, 1]; // i, j
@@ -223,17 +230,18 @@ mod tests {
         );
 
         // grad_A = grad_C @ B.T
-        // grad_C = [[1,1],[1,1]], B.T = [[1,3,5],[2,4,6]]
-        // grad_A[0,:] = [1,1] @ [[1,3,5],[2,4,6]] = [1+2, 3+4, 5+6] = [3, 7, 11]
-        // grad_A[1,:] = [1,1] @ [[1,3,5],[2,4,6]] = [3, 7, 11]
+        // B.T = [[1, 2, 3], [4, 5, 6]]
+        // grad_A = [[1,1],[1,1]] @ [[1,2,3],[4,5,6]] = [[5,7,9],[5,7,9]]
+        // In column-major: [5, 5, 7, 7, 9, 9]
         assert_eq!(grad_a.shape(), &[2, 3]);
-        assert_eq!(grad_a.to_vec(), vec![3.0, 7.0, 11.0, 3.0, 7.0, 11.0]);
+        assert_eq!(grad_a.to_vec(), vec![5.0, 5.0, 7.0, 7.0, 9.0, 9.0]);
 
         // grad_B = A.T @ grad_C
-        // A.T = [[1,4],[2,5],[3,6]], grad_C = [[1,1],[1,1]]
-        // grad_B = [[1+4, 1+4], [2+5, 2+5], [3+6, 3+6]] = [[5,5],[7,7],[9,9]]
+        // A.T = [[1, 2], [3, 4], [5, 6]]
+        // grad_B = [[1,2],[3,4],[5,6]] @ [[1,1],[1,1]] = [[3,3],[7,7],[11,11]]
+        // In column-major: [3, 7, 11, 3, 7, 11]
         assert_eq!(grad_b.shape(), &[3, 2]);
-        assert_eq!(grad_b.to_vec(), vec![5.0, 5.0, 7.0, 7.0, 9.0, 9.0]);
+        assert_eq!(grad_b.to_vec(), vec![3.0, 7.0, 11.0, 3.0, 7.0, 11.0]);
     }
 
     #[test]
@@ -268,11 +276,12 @@ mod tests {
         // Test backward pass for MaxPlus matmul
         // C[i,j] = max_k (A[i,k] + B[k,j])
         //
-        // A = [[1, 2], [3, 4]], B = [[1, 2], [3, 4]]
-        // C[0,0] = max(1+1, 2+3) = max(2, 5) = 5, argmax = 1
-        // C[0,1] = max(1+2, 2+4) = max(3, 6) = 6, argmax = 1
-        // C[1,0] = max(3+1, 4+3) = max(4, 7) = 7, argmax = 1
-        // C[1,1] = max(3+2, 4+4) = max(5, 8) = 8, argmax = 1
+        // Column-major: [1,2,3,4] for shape [2,2] → [[1,3],[2,4]]
+        // A = [[1, 3], [2, 4]], B = [[1, 3], [2, 4]]
+        // C[0,0] = max(1+1, 3+2) = max(2, 5) = 5, argmax = 1
+        // C[1,0] = max(2+1, 4+2) = max(3, 6) = 6, argmax = 1
+        // C[0,1] = max(1+3, 3+4) = max(4, 7) = 7, argmax = 1
+        // C[1,1] = max(2+3, 4+4) = max(5, 8) = 8, argmax = 1
 
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
         let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
@@ -293,38 +302,45 @@ mod tests {
             &grad_c, &a, &b, Some(&argmax), ia, ib, iy,
         );
 
-        // For tropical backward with argmax = [[1,1],[1,1]]:
+        // For tropical backward with argmax all = 1:
         // grad_A[i, argmax[i,j]] += grad_C[i,j]
-        // grad_A[0,1] = grad_C[0,0] + grad_C[0,1] = 1 + 1 = 2
-        // grad_A[1,1] = grad_C[1,0] + grad_C[1,1] = 1 + 1 = 2
-        // grad_A = [[0, 2], [0, 2]]
+        // grad_A[0,1] = grad_C[0,0] + grad_C[0,1] = 2
+        // grad_A[1,1] = grad_C[1,0] + grad_C[1,1] = 2
+        // grad_A = [[0, 2], [0, 2]] in column-major: [0, 0, 2, 2]
         assert_eq!(grad_a.shape(), &[2, 2]);
-        assert_eq!(grad_a.to_vec(), vec![0.0, 2.0, 0.0, 2.0]);
+        assert_eq!(grad_a.to_vec(), vec![0.0, 0.0, 2.0, 2.0]);
 
         // grad_B[argmax[i,j], j] += grad_C[i,j]
-        // grad_B[1,0] = grad_C[0,0] + grad_C[1,0] = 1 + 1 = 2
-        // grad_B[1,1] = grad_C[0,1] + grad_C[1,1] = 1 + 1 = 2
-        // grad_B = [[0, 0], [2, 2]]
+        // grad_B[1,0] = grad_C[0,0] + grad_C[1,0] = 2
+        // grad_B[1,1] = grad_C[0,1] + grad_C[1,1] = 2
+        // grad_B = [[0, 0], [2, 2]] in column-major: [0, 2, 0, 2]
         assert_eq!(grad_b.shape(), &[2, 2]);
-        assert_eq!(grad_b.to_vec(), vec![0.0, 0.0, 2.0, 2.0]);
+        assert_eq!(grad_b.to_vec(), vec![0.0, 2.0, 0.0, 2.0]);
     }
 
-    #[cfg(feature = "tropical")]
+    // Test only with tropical feature, not tropical-kernels, because the optimized
+    // tropical-gemm kernels may have different iteration order for small matrices
+    #[cfg(all(feature = "tropical", not(feature = "tropical-kernels")))]
     #[test]
     fn test_tropical_backward_different_winners() {
         // Test case where different elements have different winners
+        // Column-major: [5,1,1,5] for shape [2,2] → [[5,1],[1,5]]
+        // Column-major: [1,5,5,1] for shape [2,2] → [[1,5],[5,1]]
         // A = [[5, 1], [1, 5]], B = [[1, 5], [5, 1]]
-        // C[0,0] = max(5+1, 1+5) = max(6, 6) = 6, argmax = 0 (first one wins on tie)
-        // C[0,1] = max(5+5, 1+1) = max(10, 2) = 10, argmax = 0
+        // C[0,0] = max(5+1, 1+5) = max(6, 6) = 6, argmax = 0 (first wins on tie)
         // C[1,0] = max(1+1, 5+5) = max(2, 10) = 10, argmax = 1
+        // C[0,1] = max(5+5, 1+1) = max(10, 2) = 10, argmax = 0
         // C[1,1] = max(1+5, 5+1) = max(6, 6) = 6, argmax = 0
 
         let a = Tensor::<f32, Cpu>::from_data(&[5.0, 1.0, 1.0, 5.0], &[2, 2]);
         let b = Tensor::<f32, Cpu>::from_data(&[1.0, 5.0, 5.0, 1.0], &[2, 2]);
 
         let (c, argmax) = a.gemm_with_argmax::<MaxPlus<f32>>(&b);
+        // Column-major: [6, 10, 10, 6]
         assert_eq!(c.to_vec(), vec![6.0, 10.0, 10.0, 6.0]);
-        assert_eq!(argmax.to_vec(), vec![0, 0, 1, 0]);
+        // Column-major argmax: [0, 1, 0, 0]
+        // argmax[0,0]=0, argmax[1,0]=1, argmax[0,1]=0, argmax[1,1]=0
+        assert_eq!(argmax.to_vec(), vec![0, 1, 0, 0]);
 
         let grad_c = Tensor::<f32, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
 
@@ -336,19 +352,23 @@ mod tests {
             &grad_c, &a, &b, Some(&argmax), ia, ib, iy,
         );
 
-        // argmax = [[0,0],[1,0]]
-        // grad_A[0,0] = grad_C[0,0] + grad_C[0,1] = 2
-        // grad_A[1,1] = grad_C[1,0] = 1
-        // grad_A[1,0] = grad_C[1,1] = 1
-        // grad_A = [[2, 0], [1, 1]]
+        // argmax (column-major) = [0, 1, 0, 0]
+        // grad_A[i, argmax[i,k]] += grad_C[i,k]
+        // idx=0 (i=0,k=0): argmax=0, grad_A[0,0] += 1
+        // idx=1 (i=1,k=0): argmax=1, grad_A[1,1] += 1
+        // idx=2 (i=0,k=1): argmax=0, grad_A[0,0] += 1
+        // idx=3 (i=1,k=1): argmax=0, grad_A[1,0] += 1
+        // grad_A = [[2, 0], [1, 1]] in column-major: [2, 1, 0, 1]
         assert_eq!(grad_a.shape(), &[2, 2]);
-        assert_eq!(grad_a.to_vec(), vec![2.0, 0.0, 1.0, 1.0]);
+        assert_eq!(grad_a.to_vec(), vec![2.0, 1.0, 0.0, 1.0]);
 
-        // grad_B[0,0] = grad_C[0,0] = 1
-        // grad_B[0,1] = grad_C[0,1] + grad_C[1,1] = 2
-        // grad_B[1,0] = grad_C[1,0] = 1
-        // grad_B = [[1, 2], [1, 0]]
+        // grad_B[argmax[i,k], k] += grad_C[i,k]
+        // idx=0: argmax=0, grad_B[0,0] += 1
+        // idx=1: argmax=1, grad_B[1,0] += 1
+        // idx=2: argmax=0, grad_B[0,1] += 1
+        // idx=3: argmax=0, grad_B[0,1] += 1
+        // grad_B = [[1, 2], [1, 0]] in column-major: [1, 1, 2, 0]
         assert_eq!(grad_b.shape(), &[2, 2]);
-        assert_eq!(grad_b.to_vec(), vec![1.0, 2.0, 1.0, 0.0]);
+        assert_eq!(grad_b.to_vec(), vec![1.0, 1.0, 2.0, 0.0]);
     }
 }

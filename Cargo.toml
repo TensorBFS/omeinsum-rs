@@ -18,7 +18,7 @@ bytemuck = { version = "1.14", features = ["derive"] }
 faer = "0.23"
 
 # Contraction order optimization
-omeco = "0.2"
+omeco = { git = "https://github.com/GiggleLiu/omeco", branch = "fix-outer-product-optimization" }
 
 # Optional: Tropical algebra support (v0.2+ for column-major)
 tropical-gemm = { version = "0.2", optional = true }

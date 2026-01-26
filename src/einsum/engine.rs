@@ -121,21 +121,14 @@ impl Einsum<usize> {
 
         match &self.optimized {
             Some(tree) => {
-                // Handle top-level Leaf specially
+                // Handle top-level Leaf (single tensor) specially to apply unary transformations
                 if let NestedEinsum::Leaf { tensor_index } = tree {
-                    if tensors.len() == 1 {
-                        // Single tensor: apply unary transformation
-                        execute_unary_naive::<A, T, B>(
-                            tensors[*tensor_index],
-                            &self.ixs[*tensor_index],
-                            &self.iy,
-                            &self.size_dict,
-                        )
-                    } else {
-                        // Multiple tensors but optimizer returned Leaf (e.g., outer product)
-                        // Fall back to pairwise execution
-                        self.execute_pairwise::<A, T, B>(tensors)
-                    }
+                    execute_unary_naive::<A, T, B>(
+                        tensors[*tensor_index],
+                        &self.ixs[*tensor_index],
+                        &self.iy,
+                        &self.size_dict,
+                    )
                 } else {
                     self.execute_tree::<A, T, B>(tree, tensors)
                 }
@@ -169,21 +162,14 @@ impl Einsum<usize> {
 
         let result = match &self.optimized {
             Some(tree) => {
-                // Handle top-level Leaf specially
+                // Handle top-level Leaf (single tensor) specially to apply unary transformations
                 if let NestedEinsum::Leaf { tensor_index } = tree {
-                    if tensors.len() == 1 {
-                        // Single tensor: apply unary transformation
-                        execute_unary_naive::<A, T, B>(
-                            tensors[*tensor_index],
-                            &self.ixs[*tensor_index],
-                            &self.iy,
-                            &self.size_dict,
-                        )
-                    } else {
-                        // Multiple tensors but optimizer returned Leaf (e.g., outer product)
-                        // Fall back to pairwise execution
-                        self.execute_pairwise_with_argmax::<A, T, B>(tensors, &mut argmax_cache)
-                    }
+                    execute_unary_naive::<A, T, B>(
+                        tensors[*tensor_index],
+                        &self.ixs[*tensor_index],
+                        &self.iy,
+                        &self.size_dict,
+                    )
                 } else {
                     self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache)
                 }

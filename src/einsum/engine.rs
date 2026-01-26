@@ -161,7 +161,19 @@ impl Einsum<usize> {
         let mut argmax_cache = Vec::new();
 
         let result = match &self.optimized {
-            Some(tree) => self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache),
+            Some(tree) => {
+                // Handle top-level Leaf (single tensor) specially to apply unary transformations
+                if let NestedEinsum::Leaf { tensor_index } = tree {
+                    execute_unary_naive::<A, T, B>(
+                        tensors[*tensor_index],
+                        &self.ixs[*tensor_index],
+                        &self.iy,
+                        &self.size_dict,
+                    )
+                } else {
+                    self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache)
+                }
+            }
             None => self.execute_pairwise_with_argmax::<A, T, B>(tensors, &mut argmax_cache),
         };
 
@@ -186,15 +198,18 @@ impl Einsum<usize> {
             NestedEinsum::Node { args, eins } => {
                 assert_eq!(args.len(), 2, "Expected binary contraction tree");
 
-                let left = self.execute_tree_with_argmax::<A, T, B>(&args[0], tensors, argmax_cache);
-                let right = self.execute_tree_with_argmax::<A, T, B>(&args[1], tensors, argmax_cache);
+                let left =
+                    self.execute_tree_with_argmax::<A, T, B>(&args[0], tensors, argmax_cache);
+                let right =
+                    self.execute_tree_with_argmax::<A, T, B>(&args[1], tensors, argmax_cache);
 
                 let ia = &eins.ixs[0];
                 let ib = &eins.ixs[1];
                 let iy = &eins.iy;
 
                 if A::needs_argmax() {
-                    let (result, argmax) = left.contract_binary_with_argmax::<A>(&right, ia, ib, iy);
+                    let (result, argmax) =
+                        left.contract_binary_with_argmax::<A>(&right, ia, ib, iy);
                     argmax_cache.push(argmax);
                     result
                 } else {
@@ -346,11 +361,7 @@ impl Einsum<usize> {
 }
 
 /// Compute intermediate output indices for pairwise contraction.
-fn compute_intermediate_output(
-    ia: &[usize],
-    ib: &[usize],
-    final_output: &[usize],
-) -> Vec<usize> {
+fn compute_intermediate_output(ia: &[usize], ib: &[usize], final_output: &[usize]) -> Vec<usize> {
     let final_set: std::collections::HashSet<_> = final_output.iter().copied().collect();
     let ia_set: std::collections::HashSet<_> = ia.iter().copied().collect();
     let ib_set: std::collections::HashSet<_> = ib.iter().copied().collect();
@@ -464,13 +475,14 @@ where
     // inner = indices that appear in input but not in output (summed over)
     let outer: &[usize] = iy;
     let outer_set: HashSet<usize> = outer.iter().copied().collect();
-    let inner_vec: Vec<usize> = ix
-        .iter()
-        .copied()
-        .filter(|i| !outer_set.contains(i))
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    // Collect inner indices deterministically, preserving the order from `ix`
+    let mut inner_vec: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for i in ix.iter().copied().filter(|i| !outer_set.contains(i)) {
+        if seen.insert(i) {
+            inner_vec.push(i);
+        }
+    }
 
     // 2. Build output shape
     let out_shape: Vec<usize> = outer.iter().map(|&idx| size_dict[&idx]).collect();
@@ -511,7 +523,7 @@ where
     }
 
     if out_shape.is_empty() {
-        Tensor::from_data(&out_data, &[1])
+        Tensor::from_data(&out_data, &[])
     } else {
         Tensor::from_data(&out_data, &out_shape)
     }
@@ -565,11 +577,7 @@ mod tests {
         let c = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
         let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
-        let mut ein = Einsum::new(
-            vec![vec![0, 1], vec![1, 2], vec![2, 3]],
-            vec![0, 3],
-            sizes,
-        );
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2], vec![2, 3]], vec![0, 3], sizes);
 
         ein.optimize_greedy();
         let d = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b, &c]);
@@ -846,7 +854,7 @@ mod tests {
         let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // trace = A[0,0] + A[1,1] = 1 + 4 = 5
-        assert_eq!(result.shape(), &[1]);
+        assert_eq!(result.shape(), &[]);
         assert_eq!(result.to_vec()[0], 5.0);
     }
 
@@ -898,7 +906,7 @@ mod tests {
         let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // sum all = 1 + 2 + 3 + 4 = 10
-        assert_eq!(result.shape(), &[1]);
+        assert_eq!(result.shape(), &[]);
         assert_eq!(result.to_vec()[0], 10.0);
     }
 
@@ -986,7 +994,7 @@ mod tests {
         let result = execute_unary_naive::<MaxPlus<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // tropical trace = max(A[0,0], A[1,1]) = max(1, 4) = 4
-        assert_eq!(result.shape(), &[1]);
+        assert_eq!(result.shape(), &[]);
         assert_eq!(result.to_vec()[0], 4.0);
     }
 
@@ -1007,5 +1015,125 @@ mod tests {
 
         // trace = A[0,0] + A[1,1] = 1 + 4 = 5
         assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_einsum_unary_with_argmax_optimized() {
+        // Test execute_with_argmax for unary operations (optimized path)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        ein.optimize_greedy();
+        let (result, argmax_cache) = ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+        // No argmax for unary operations
+        assert!(argmax_cache.is_empty());
+    }
+
+    #[test]
+    fn test_einsum_unary_pairwise_path() {
+        // Test unary operation through pairwise path (no optimization)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        // Not optimized - uses pairwise path
+        assert!(!ein.is_optimized());
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_einsum_unary_with_argmax_pairwise() {
+        // Test execute_with_argmax for unary operations (pairwise path)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        // Not optimized - uses pairwise path
+        let (result, argmax_cache) = ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+        // No argmax for unary operations
+        assert!(argmax_cache.is_empty());
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_einsum_with_argmax_tropical() {
+        // Test execute_with_argmax for tropical algebra (needs argmax)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2]], vec![0, 2], sizes);
+
+        ein.optimize_greedy();
+        let (result, argmax_cache) = ein.execute_with_argmax::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+
+        // MaxPlus matmul: C[i,k] = max_j(A[i,j] + B[j,k])
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), vec![5.0, 6.0, 7.0, 8.0]);
+
+        // Should have argmax tensors for binary contractions
+        assert!(!argmax_cache.is_empty());
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_einsum_with_argmax_tropical_pairwise() {
+        // Test execute_with_argmax for tropical algebra (pairwise path)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 1], vec![1, 2]], vec![0, 2], sizes);
+
+        // Not optimized - uses pairwise path
+        let (result, argmax_cache) = ein.execute_with_argmax::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), vec![5.0, 6.0, 7.0, 8.0]);
+
+        // Should have argmax tensors
+        assert!(!argmax_cache.is_empty());
+    }
+
+    #[test]
+    fn test_einsum_transpose_optimized() {
+        // Test transpose operation through optimized path
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1]], vec![1, 0], sizes);
+
+        ein.optimize_greedy();
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        assert_eq!(result.shape(), &[3, 2]);
+        // A (col-major) = [[1,3,5],[2,4,6]]
+        // A^T = [[1,2],[3,4],[5,6]]
+        // In col-major: [1, 3, 5, 2, 4, 6]
+        assert_eq!(result.to_vec(), vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_intermediate_output_computation() {
+        // Test the compute_intermediate_output function
+        // ij,jk->ik: j is contracted
+        let output = compute_intermediate_output(&[0, 1], &[1, 2], &[0, 2]);
+        assert!(output.contains(&0));
+        assert!(output.contains(&2));
+        assert!(!output.contains(&1));
     }
 }

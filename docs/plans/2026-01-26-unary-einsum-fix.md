@@ -104,12 +104,14 @@ where
     // 1. Classify indices
     let outer: &[usize] = iy;
     let outer_set: HashSet<usize> = outer.iter().copied().collect();
-    let inner_vec: Vec<usize> = ix.iter()
-        .copied()
-        .filter(|i| !outer_set.contains(i))
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    // Collect inner indices deterministically, preserving the order from `ix`
+    let mut inner_vec: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for i in ix.iter().copied().filter(|i| !outer_set.contains(i)) {
+        if seen.insert(i) {
+            inner_vec.push(i);
+        }
+    }
 
     // 2. Build output shape
     let out_shape: Vec<usize> = outer.iter()
@@ -153,7 +155,7 @@ where
     }
 
     if out_shape.is_empty() {
-        Tensor::from_data(&out_data, &[1])
+        Tensor::from_data(&out_data, &[])
     } else {
         Tensor::from_data(&out_data, &out_shape)
     }

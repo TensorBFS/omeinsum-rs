@@ -478,7 +478,6 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     }
 }
 
-/// Compute strides for row-major (C) contiguous layout.
 /// Compute contiguous strides for column-major (Fortran) layout.
 ///
 /// For shape [m, n], returns strides [1, m] (first dimension is contiguous).

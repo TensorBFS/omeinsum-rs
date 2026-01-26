@@ -13,3 +13,6 @@ workspace = true
 # Skip lines in panic/assert format strings and debug_assert blocks
 # These are defensive code that only runs on programmer error
 ignore-panics = true
+
+# Exclude CUDA backend (requires GPU hardware)
+exclude-files = ["src/backend/cuda/*"]

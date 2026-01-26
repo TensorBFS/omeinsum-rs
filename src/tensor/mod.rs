@@ -238,9 +238,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
 
     /// Get element at linear index (column-major).
     ///
+    /// This is an O(ndim) operation that directly accesses storage without
+    /// allocating memory. The linear index is interpreted in column-major order.
+    ///
     /// # Arguments
     ///
-    /// * `index` - Linear index into the flattened tensor
+    /// * `index` - Linear index into the flattened tensor (column-major order)
     ///
     /// # Panics
     ///
@@ -256,7 +259,27 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     /// assert_eq!(t.get(3), 4.0);
     /// ```
     pub fn get(&self, index: usize) -> T {
-        self.to_vec()[index]
+        let numel = self.numel();
+        assert!(
+            index < numel,
+            "Index {} out of bounds for tensor with {} elements (shape {:?})",
+            index,
+            numel,
+            self.shape
+        );
+
+        // Convert linear index to multi-dimensional coordinates (column-major)
+        // Column-major: first dimension varies fastest
+        let mut remaining = index;
+        let mut storage_offset = self.offset;
+
+        for dim in 0..self.ndim() {
+            let coord = remaining % self.shape[dim];
+            remaining /= self.shape[dim];
+            storage_offset += coord * self.strides[dim];
+        }
+
+        self.storage.get(storage_offset)
     }
 
     // ========================================================================
@@ -672,5 +695,25 @@ mod tests {
         assert_eq!(p.get(3), 2.0);
         assert_eq!(p.get(4), 4.0);
         assert_eq!(p.get(5), 6.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn test_get_out_of_bounds() {
+        let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let _ = t.get(4); // Index 4 is out of bounds for 4-element tensor
+    }
+
+    #[test]
+    fn test_get_3d_tensor() {
+        // Test get on a 3D tensor to ensure multi-dimensional indexing works
+        // Shape [2, 3, 2], 12 elements
+        let data: Vec<f32> = (1..=12).map(|x| x as f32).collect();
+        let t = Tensor::<f32, Cpu>::from_data(&data, &[2, 3, 2]);
+
+        // In column-major, elements are ordered by first dim varying fastest
+        for i in 0..12 {
+            assert_eq!(t.get(i), data[i]);
+        }
     }
 }

@@ -416,6 +416,59 @@ fn compute_intermediate_output(
     output
 }
 
+/// Convert linear index to multi-dimensional index (column-major).
+///
+/// Given a flat/linear index and a shape, returns the multi-dimensional
+/// coordinates for column-major storage order.
+///
+/// # Arguments
+///
+/// * `linear` - The flat index into the tensor
+/// * `shape` - The shape of the tensor
+///
+/// # Returns
+///
+/// A vector of indices, one per dimension
+fn linear_to_multi(mut linear: usize, shape: &[usize]) -> Vec<usize> {
+    if shape.is_empty() {
+        return vec![];
+    }
+    let mut multi = vec![0; shape.len()];
+    for i in 0..shape.len() {
+        multi[i] = linear % shape[i];
+        linear /= shape[i];
+    }
+    multi
+}
+
+/// Compute input tensor position from index values (column-major).
+///
+/// Given index labels and their current values, computes the flat position
+/// in the input tensor using column-major ordering.
+///
+/// # Arguments
+///
+/// * `ix` - The index labels for the input tensor
+/// * `idx_values` - Mapping from index label to current value
+/// * `shape` - The shape of the input tensor
+///
+/// # Returns
+///
+/// The flat position in the tensor
+fn compute_input_position(
+    ix: &[usize],
+    idx_values: &HashMap<usize, usize>,
+    shape: &[usize],
+) -> usize {
+    let mut pos = 0;
+    let mut stride = 1;
+    for (dim, &idx) in ix.iter().enumerate() {
+        pos += idx_values[&idx] * stride;
+        stride *= shape[dim];
+    }
+    pos
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,5 +599,166 @@ mod tests {
         let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a]);
         // tropical trace = max(1, 4) = 4
         assert_eq!(result.to_vec()[0], 4.0);
+    }
+
+    // Tests for helper functions
+
+    #[test]
+    fn test_linear_to_multi_empty_shape() {
+        // Empty shape should return empty multi-index
+        let result = linear_to_multi(0, &[]);
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_linear_to_multi_1d() {
+        // 1D array: linear index equals multi-index
+        assert_eq!(linear_to_multi(0, &[5]), vec![0]);
+        assert_eq!(linear_to_multi(3, &[5]), vec![3]);
+        assert_eq!(linear_to_multi(4, &[5]), vec![4]);
+    }
+
+    #[test]
+    fn test_linear_to_multi_2d() {
+        // 2D array with shape [2, 3] (column-major)
+        // Linear 0 -> (0, 0)
+        // Linear 1 -> (1, 0)
+        // Linear 2 -> (0, 1)
+        // Linear 3 -> (1, 1)
+        // Linear 4 -> (0, 2)
+        // Linear 5 -> (1, 2)
+        assert_eq!(linear_to_multi(0, &[2, 3]), vec![0, 0]);
+        assert_eq!(linear_to_multi(1, &[2, 3]), vec![1, 0]);
+        assert_eq!(linear_to_multi(2, &[2, 3]), vec![0, 1]);
+        assert_eq!(linear_to_multi(3, &[2, 3]), vec![1, 1]);
+        assert_eq!(linear_to_multi(4, &[2, 3]), vec![0, 2]);
+        assert_eq!(linear_to_multi(5, &[2, 3]), vec![1, 2]);
+    }
+
+    #[test]
+    fn test_linear_to_multi_3d() {
+        // 3D array with shape [2, 3, 4] (column-major)
+        // Strides: [1, 2, 6]
+        // Linear 0 -> (0, 0, 0)
+        // Linear 1 -> (1, 0, 0)
+        // Linear 2 -> (0, 1, 0)
+        // Linear 6 -> (0, 0, 1)
+        // Linear 7 -> (1, 0, 1)
+        assert_eq!(linear_to_multi(0, &[2, 3, 4]), vec![0, 0, 0]);
+        assert_eq!(linear_to_multi(1, &[2, 3, 4]), vec![1, 0, 0]);
+        assert_eq!(linear_to_multi(2, &[2, 3, 4]), vec![0, 1, 0]);
+        assert_eq!(linear_to_multi(6, &[2, 3, 4]), vec![0, 0, 1]);
+        assert_eq!(linear_to_multi(7, &[2, 3, 4]), vec![1, 0, 1]);
+        // Last element: linear 23 -> (1, 2, 3)
+        assert_eq!(linear_to_multi(23, &[2, 3, 4]), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_compute_input_position_1d() {
+        // 1D tensor with index label 0
+        let ix = vec![0];
+        let shape = vec![5];
+
+        let mut idx_values = HashMap::new();
+        idx_values.insert(0, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 0);
+
+        idx_values.insert(0, 3);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 3);
+    }
+
+    #[test]
+    fn test_compute_input_position_2d() {
+        // 2D tensor with shape [2, 3], index labels (0, 1)
+        // Column-major: position = i + j * 2
+        let ix = vec![0, 1];
+        let shape = vec![2, 3];
+
+        let mut idx_values = HashMap::new();
+
+        // (0, 0) -> position 0
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 0);
+
+        // (1, 0) -> position 1
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 1);
+
+        // (0, 1) -> position 2
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 1);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 2);
+
+        // (1, 2) -> position 1 + 2*2 = 5
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 2);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 5);
+    }
+
+    #[test]
+    fn test_compute_input_position_3d() {
+        // 3D tensor with shape [2, 3, 4], index labels (0, 1, 2)
+        // Column-major: position = i + j * 2 + k * 6
+        let ix = vec![0, 1, 2];
+        let shape = vec![2, 3, 4];
+
+        let mut idx_values = HashMap::new();
+
+        // (0, 0, 0) -> position 0
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 0);
+        idx_values.insert(2, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 0);
+
+        // (1, 0, 0) -> position 1
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 0);
+        idx_values.insert(2, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 1);
+
+        // (0, 1, 0) -> position 2
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 1);
+        idx_values.insert(2, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 2);
+
+        // (0, 0, 1) -> position 6
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 0);
+        idx_values.insert(2, 1);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 6);
+
+        // (1, 2, 3) -> position 1 + 2*2 + 3*6 = 1 + 4 + 18 = 23
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 2);
+        idx_values.insert(2, 3);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 23);
+    }
+
+    #[test]
+    fn test_linear_to_multi_roundtrip() {
+        // Verify that linear_to_multi and compute_input_position are consistent
+        let shape = vec![2, 3, 4];
+        let ix: Vec<usize> = (0..shape.len()).collect();
+        let total_size: usize = shape.iter().product();
+
+        for linear in 0..total_size {
+            let multi = linear_to_multi(linear, &shape);
+
+            // Build idx_values from multi
+            let mut idx_values = HashMap::new();
+            for (dim, &val) in multi.iter().enumerate() {
+                idx_values.insert(dim, val);
+            }
+
+            let computed_pos = compute_input_position(&ix, &idx_values, &shape);
+            assert_eq!(
+                computed_pos, linear,
+                "Roundtrip failed for linear={}, multi={:?}",
+                linear, multi
+            );
+        }
     }
 }

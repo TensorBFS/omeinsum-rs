@@ -187,7 +187,6 @@ fn test_sum_other_axis() {
 }
 
 #[test]
-#[ignore = "Transpose as unary einsum operation not yet supported"]
 fn test_transpose() {
     // ein"ij -> ji"(a) = a^T
     // Transpose is a permutation operation that requires special handling
@@ -340,7 +339,6 @@ fn test_tensor_network_contraction() {
 // ============================================================================
 
 #[test]
-#[ignore = "4D partial trace not yet supported in unary operations"]
 fn test_partial_trace_4d() {
     // Partial trace: ein"ijjk -> ik"
     // 2x2x2x2 tensor, trace over middle indices
@@ -440,7 +438,7 @@ fn test_sum_gradient() {
 }
 
 #[test]
-#[ignore = "Outer product gradients require special handling"]
+#[ignore = "Outer product via convenience function contracts indices incorrectly; use Einsum directly"]
 fn test_outer_product_gradient() {
     // Test gradient of outer product
     // Note: Outer products require explicit Einsum setup

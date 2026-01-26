@@ -120,7 +120,19 @@ impl Einsum<usize> {
         );
 
         match &self.optimized {
-            Some(tree) => self.execute_tree::<A, T, B>(tree, tensors),
+            Some(tree) => {
+                // Handle top-level Leaf (single tensor) specially to apply unary transformations
+                if let NestedEinsum::Leaf { tensor_index } = tree {
+                    execute_unary_naive::<A, T, B>(
+                        tensors[*tensor_index],
+                        &self.ixs[*tensor_index],
+                        &self.iy,
+                        &self.size_dict,
+                    )
+                } else {
+                    self.execute_tree::<A, T, B>(tree, tensors)
+                }
+            }
             None => self.execute_pairwise::<A, T, B>(tensors),
         }
     }
@@ -149,7 +161,19 @@ impl Einsum<usize> {
         let mut argmax_cache = Vec::new();
 
         let result = match &self.optimized {
-            Some(tree) => self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache),
+            Some(tree) => {
+                // Handle top-level Leaf (single tensor) specially to apply unary transformations
+                if let NestedEinsum::Leaf { tensor_index } = tree {
+                    execute_unary_naive::<A, T, B>(
+                        tensors[*tensor_index],
+                        &self.ixs[*tensor_index],
+                        &self.iy,
+                        &self.size_dict,
+                    )
+                } else {
+                    self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache)
+                }
+            }
             None => self.execute_pairwise_with_argmax::<A, T, B>(tensors, &mut argmax_cache),
         };
 
@@ -174,15 +198,18 @@ impl Einsum<usize> {
             NestedEinsum::Node { args, eins } => {
                 assert_eq!(args.len(), 2, "Expected binary contraction tree");
 
-                let left = self.execute_tree_with_argmax::<A, T, B>(&args[0], tensors, argmax_cache);
-                let right = self.execute_tree_with_argmax::<A, T, B>(&args[1], tensors, argmax_cache);
+                let left =
+                    self.execute_tree_with_argmax::<A, T, B>(&args[0], tensors, argmax_cache);
+                let right =
+                    self.execute_tree_with_argmax::<A, T, B>(&args[1], tensors, argmax_cache);
 
                 let ia = &eins.ixs[0];
                 let ib = &eins.ixs[1];
                 let iy = &eins.iy;
 
                 if A::needs_argmax() {
-                    let (result, argmax) = left.contract_binary_with_argmax::<A>(&right, ia, ib, iy);
+                    let (result, argmax) =
+                        left.contract_binary_with_argmax::<A>(&right, ia, ib, iy);
                     argmax_cache.push(argmax);
                     result
                 } else {
@@ -208,7 +235,12 @@ impl Einsum<usize> {
         }
 
         if tensors.len() == 1 {
-            return self.execute_unary::<A, T, B>(tensors[0], &self.ixs[0]);
+            return execute_unary_naive::<A, T, B>(
+                tensors[0],
+                &self.ixs[0],
+                &self.iy,
+                &self.size_dict,
+            );
         }
 
         // Contract left to right
@@ -290,7 +322,12 @@ impl Einsum<usize> {
 
         if tensors.len() == 1 {
             // Single tensor: just trace/reduce if needed
-            return self.execute_unary::<A, T, B>(tensors[0], &self.ixs[0]);
+            return execute_unary_naive::<A, T, B>(
+                tensors[0],
+                &self.ixs[0],
+                &self.iy,
+                &self.size_dict,
+            );
         }
 
         // Contract left to right
@@ -321,79 +358,10 @@ impl Einsum<usize> {
 
         result
     }
-
-    /// Execute unary operation (trace/diagonal/reduction).
-    ///
-    /// Handles:
-    /// - Trace: `A[i,i] -> scalar` - sum of diagonal elements
-    /// - Diagonal: `A[i,i] -> B[i]` - extract diagonal
-    /// - Reduction: `A[i,j] -> B[i]` - sum over j
-    fn execute_unary<A, T, B>(&self, tensor: &Tensor<T, B>, ix: &[usize]) -> Tensor<T, B>
-    where
-        A: Algebra<Scalar = T>,
-        T: Scalar,
-        B: Backend + Default,
-    {
-        // Find repeated indices (for trace/diagonal)
-        let mut index_counts: HashMap<usize, usize> = HashMap::new();
-        for &i in ix {
-            *index_counts.entry(i).or_insert(0) += 1;
-        }
-
-        let repeated: Vec<usize> = index_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(&idx, _)| idx)
-            .collect();
-
-        // Find indices to sum over (in input but not in output)
-        let output_set: HashSet<_> = self.iy.iter().copied().collect();
-
-        // Handle repeated indices (trace/diagonal)
-        if !repeated.is_empty() && tensor.ndim() == 2 {
-            let diag = tensor.diagonal();
-            if self.iy.is_empty() {
-                // Trace: sum the diagonal
-                let sum = diag.sum::<A>();
-                return Tensor::from_data(&[sum], &[1]);
-            } else {
-                // Diagonal extraction
-                return diag;
-            }
-        }
-
-        // Handle reduction (sum over axes not in output)
-        // Find which axis positions need to be summed
-        let mut axes_to_sum: Vec<usize> = Vec::new();
-        for (axis, &idx) in ix.iter().enumerate() {
-            if !output_set.contains(&idx) {
-                axes_to_sum.push(axis);
-            }
-        }
-
-        if !axes_to_sum.is_empty() {
-            // Sum over axes from highest to lowest to maintain correct indexing
-            axes_to_sum.sort();
-            axes_to_sum.reverse();
-
-            let mut result = tensor.clone();
-            for axis in axes_to_sum {
-                result = result.sum_axis::<A>(axis);
-            }
-            return result;
-        }
-
-        // No operation needed, just return the tensor
-        tensor.clone()
-    }
 }
 
 /// Compute intermediate output indices for pairwise contraction.
-fn compute_intermediate_output(
-    ia: &[usize],
-    ib: &[usize],
-    final_output: &[usize],
-) -> Vec<usize> {
+fn compute_intermediate_output(ia: &[usize], ib: &[usize], final_output: &[usize]) -> Vec<usize> {
     let final_set: std::collections::HashSet<_> = final_output.iter().copied().collect();
     let ia_set: std::collections::HashSet<_> = ia.iter().copied().collect();
     let ib_set: std::collections::HashSet<_> = ib.iter().copied().collect();
@@ -414,6 +382,151 @@ fn compute_intermediate_output(
     }
 
     output
+}
+
+/// Convert linear index to multi-dimensional index (column-major).
+///
+/// Given a flat/linear index and a shape, returns the multi-dimensional
+/// coordinates for column-major storage order.
+///
+/// # Arguments
+///
+/// * `linear` - The flat index into the tensor
+/// * `shape` - The shape of the tensor
+///
+/// # Returns
+///
+/// A vector of indices, one per dimension
+fn linear_to_multi(mut linear: usize, shape: &[usize]) -> Vec<usize> {
+    if shape.is_empty() {
+        return vec![];
+    }
+    let mut multi = vec![0; shape.len()];
+    for i in 0..shape.len() {
+        multi[i] = linear % shape[i];
+        linear /= shape[i];
+    }
+    multi
+}
+
+/// Compute input tensor position from index values (column-major).
+///
+/// Given index labels and their current values, computes the flat position
+/// in the input tensor using column-major ordering.
+///
+/// # Arguments
+///
+/// * `ix` - The index labels for the input tensor
+/// * `idx_values` - Mapping from index label to current value
+/// * `shape` - The shape of the input tensor
+///
+/// # Returns
+///
+/// The flat position in the tensor
+fn compute_input_position(
+    ix: &[usize],
+    idx_values: &HashMap<usize, usize>,
+    shape: &[usize],
+) -> usize {
+    let mut pos = 0;
+    let mut stride = 1;
+    for (dim, &idx) in ix.iter().enumerate() {
+        pos += idx_values[&idx] * stride;
+        stride *= shape[dim];
+    }
+    pos
+}
+
+/// Execute unary einsum operation using naive loop.
+/// Handles trace, diagonal, sum, permutation uniformly.
+///
+/// # Type Parameters
+///
+/// * `A` - The algebra to use for accumulation
+/// * `T` - The scalar type
+/// * `B` - The backend type
+///
+/// # Arguments
+///
+/// * `tensor` - The input tensor
+/// * `ix` - Input index labels (may contain repeated indices for trace/diagonal)
+/// * `iy` - Output index labels
+/// * `size_dict` - Mapping from index labels to dimension sizes
+///
+/// # Key Insight
+///
+/// For repeated indices like `ix = [0, 1, 1, 2]` (ijjk), positions 1 and 2 both map
+/// to index label `1`. This automatically handles diagonal extraction because
+/// `compute_input_position` uses `idx_values[&idx]` - when the same index label
+/// appears multiple times in `ix`, those positions will use the same value.
+fn execute_unary_naive<A, T, B>(
+    tensor: &Tensor<T, B>,
+    ix: &[usize],
+    iy: &[usize],
+    size_dict: &HashMap<usize, usize>,
+) -> Tensor<T, B>
+where
+    A: Algebra<Scalar = T>,
+    T: Scalar,
+    B: Backend + Default,
+{
+    // 1. Classify indices
+    // outer = output indices
+    // inner = indices that appear in input but not in output (summed over)
+    let outer: &[usize] = iy;
+    let outer_set: HashSet<usize> = outer.iter().copied().collect();
+    // Collect inner indices deterministically, preserving the order from `ix`
+    let mut inner_vec: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for i in ix.iter().copied().filter(|i| !outer_set.contains(i)) {
+        if seen.insert(i) {
+            inner_vec.push(i);
+        }
+    }
+
+    // 2. Build output shape
+    let out_shape: Vec<usize> = outer.iter().map(|&idx| size_dict[&idx]).collect();
+    let out_size = out_shape.iter().product::<usize>().max(1);
+
+    // 3. Build inner ranges (dimensions to sum over)
+    let inner_ranges: Vec<usize> = inner_vec.iter().map(|&idx| size_dict[&idx]).collect();
+    let inner_size = inner_ranges.iter().product::<usize>().max(1);
+
+    // 4. Allocate output
+    let mut out_data = vec![A::zero().to_scalar(); out_size];
+
+    // 5. Loop over output positions
+    for out_linear in 0..out_size {
+        let out_multi = linear_to_multi(out_linear, &out_shape);
+
+        // Map: outer index label -> value
+        let mut idx_values: HashMap<usize, usize> = outer
+            .iter()
+            .zip(out_multi.iter())
+            .map(|(&idx, &val)| (idx, val))
+            .collect();
+
+        // 6. Accumulate over inner indices
+        let mut acc = A::zero();
+        for inner_linear in 0..inner_size {
+            let inner_multi = linear_to_multi(inner_linear, &inner_ranges);
+            for (&idx, &val) in inner_vec.iter().zip(inner_multi.iter()) {
+                idx_values.insert(idx, val);
+            }
+
+            // 7. Compute input position and accumulate
+            let in_pos = compute_input_position(ix, &idx_values, tensor.shape());
+            acc = acc.add(A::from_scalar(tensor.get(in_pos)));
+        }
+
+        out_data[out_linear] = acc.to_scalar();
+    }
+
+    if out_shape.is_empty() {
+        Tensor::from_data(&out_data, &[])
+    } else {
+        Tensor::from_data(&out_data, &out_shape)
+    }
 }
 
 #[cfg(test)]
@@ -464,11 +577,7 @@ mod tests {
         let c = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
         let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
-        let mut ein = Einsum::new(
-            vec![vec![0, 1], vec![1, 2], vec![2, 3]],
-            vec![0, 3],
-            sizes,
-        );
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2], vec![2, 3]], vec![0, 3], sizes);
 
         ein.optimize_greedy();
         let d = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b, &c]);
@@ -546,5 +655,485 @@ mod tests {
         let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a]);
         // tropical trace = max(1, 4) = 4
         assert_eq!(result.to_vec()[0], 4.0);
+    }
+
+    // Tests for helper functions
+
+    #[test]
+    fn test_linear_to_multi_empty_shape() {
+        // Empty shape should return empty multi-index
+        let result = linear_to_multi(0, &[]);
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_linear_to_multi_1d() {
+        // 1D array: linear index equals multi-index
+        assert_eq!(linear_to_multi(0, &[5]), vec![0]);
+        assert_eq!(linear_to_multi(3, &[5]), vec![3]);
+        assert_eq!(linear_to_multi(4, &[5]), vec![4]);
+    }
+
+    #[test]
+    fn test_linear_to_multi_2d() {
+        // 2D array with shape [2, 3] (column-major)
+        // Linear 0 -> (0, 0)
+        // Linear 1 -> (1, 0)
+        // Linear 2 -> (0, 1)
+        // Linear 3 -> (1, 1)
+        // Linear 4 -> (0, 2)
+        // Linear 5 -> (1, 2)
+        assert_eq!(linear_to_multi(0, &[2, 3]), vec![0, 0]);
+        assert_eq!(linear_to_multi(1, &[2, 3]), vec![1, 0]);
+        assert_eq!(linear_to_multi(2, &[2, 3]), vec![0, 1]);
+        assert_eq!(linear_to_multi(3, &[2, 3]), vec![1, 1]);
+        assert_eq!(linear_to_multi(4, &[2, 3]), vec![0, 2]);
+        assert_eq!(linear_to_multi(5, &[2, 3]), vec![1, 2]);
+    }
+
+    #[test]
+    fn test_linear_to_multi_3d() {
+        // 3D array with shape [2, 3, 4] (column-major)
+        // Strides: [1, 2, 6]
+        // Linear 0 -> (0, 0, 0)
+        // Linear 1 -> (1, 0, 0)
+        // Linear 2 -> (0, 1, 0)
+        // Linear 6 -> (0, 0, 1)
+        // Linear 7 -> (1, 0, 1)
+        assert_eq!(linear_to_multi(0, &[2, 3, 4]), vec![0, 0, 0]);
+        assert_eq!(linear_to_multi(1, &[2, 3, 4]), vec![1, 0, 0]);
+        assert_eq!(linear_to_multi(2, &[2, 3, 4]), vec![0, 1, 0]);
+        assert_eq!(linear_to_multi(6, &[2, 3, 4]), vec![0, 0, 1]);
+        assert_eq!(linear_to_multi(7, &[2, 3, 4]), vec![1, 0, 1]);
+        // Last element: linear 23 -> (1, 2, 3)
+        assert_eq!(linear_to_multi(23, &[2, 3, 4]), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_compute_input_position_1d() {
+        // 1D tensor with index label 0
+        let ix = vec![0];
+        let shape = vec![5];
+
+        let mut idx_values = HashMap::new();
+        idx_values.insert(0, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 0);
+
+        idx_values.insert(0, 3);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 3);
+    }
+
+    #[test]
+    fn test_compute_input_position_2d() {
+        // 2D tensor with shape [2, 3], index labels (0, 1)
+        // Column-major: position = i + j * 2
+        let ix = vec![0, 1];
+        let shape = vec![2, 3];
+
+        let mut idx_values = HashMap::new();
+
+        // (0, 0) -> position 0
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 0);
+
+        // (1, 0) -> position 1
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 1);
+
+        // (0, 1) -> position 2
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 1);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 2);
+
+        // (1, 2) -> position 1 + 2*2 = 5
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 2);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 5);
+    }
+
+    #[test]
+    fn test_compute_input_position_3d() {
+        // 3D tensor with shape [2, 3, 4], index labels (0, 1, 2)
+        // Column-major: position = i + j * 2 + k * 6
+        let ix = vec![0, 1, 2];
+        let shape = vec![2, 3, 4];
+
+        let mut idx_values = HashMap::new();
+
+        // (0, 0, 0) -> position 0
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 0);
+        idx_values.insert(2, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 0);
+
+        // (1, 0, 0) -> position 1
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 0);
+        idx_values.insert(2, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 1);
+
+        // (0, 1, 0) -> position 2
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 1);
+        idx_values.insert(2, 0);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 2);
+
+        // (0, 0, 1) -> position 6
+        idx_values.insert(0, 0);
+        idx_values.insert(1, 0);
+        idx_values.insert(2, 1);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 6);
+
+        // (1, 2, 3) -> position 1 + 2*2 + 3*6 = 1 + 4 + 18 = 23
+        idx_values.insert(0, 1);
+        idx_values.insert(1, 2);
+        idx_values.insert(2, 3);
+        assert_eq!(compute_input_position(&ix, &idx_values, &shape), 23);
+    }
+
+    #[test]
+    fn test_linear_to_multi_roundtrip() {
+        // Verify that linear_to_multi and compute_input_position are consistent
+        let shape = vec![2, 3, 4];
+        let ix: Vec<usize> = (0..shape.len()).collect();
+        let total_size: usize = shape.iter().product();
+
+        for linear in 0..total_size {
+            let multi = linear_to_multi(linear, &shape);
+
+            // Build idx_values from multi
+            let mut idx_values = HashMap::new();
+            for (dim, &val) in multi.iter().enumerate() {
+                idx_values.insert(dim, val);
+            }
+
+            let computed_pos = compute_input_position(&ix, &idx_values, &shape);
+            assert_eq!(
+                computed_pos, linear,
+                "Roundtrip failed for linear={}, multi={:?}",
+                linear, multi
+            );
+        }
+    }
+
+    // ========================================================================
+    // Tests for execute_unary_naive
+    // ========================================================================
+
+    #[test]
+    fn test_unary_naive_transpose() {
+        // Transpose: A[i,j] -> B[j,i]
+        // Input matrix (column-major): [[1, 3], [2, 4]]
+        // data = [1, 2, 3, 4], shape = [2, 2]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![1, 0]; // B[j,i]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // After transpose: [[1, 2], [3, 4]] in column-major = [1, 3, 2, 4]
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), vec![1.0, 3.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_trace() {
+        // Trace: A[i,i] -> scalar (sum of diagonal)
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        // data = [1, 2, 3, 4], shape = [2, 2]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2)].into();
+        let ix = vec![0, 0]; // A[i,i] - repeated index means diagonal
+        let iy = vec![]; // scalar output
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // trace = A[0,0] + A[1,1] = 1 + 4 = 5
+        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_unary_naive_diagonal() {
+        // Diagonal extraction: A[i,i] -> B[i]
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2)].into();
+        let ix = vec![0, 0]; // A[i,i] - repeated index
+        let iy = vec![0]; // output B[i]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // diagonal = [A[0,0], A[1,1]] = [1, 4]
+        assert_eq!(result.shape(), &[2]);
+        assert_eq!(result.to_vec(), vec![1.0, 4.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_sum_axis() {
+        // Sum over axis: A[i,j] -> B[i] (sum over j)
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![0]; // B[i] - j is summed out
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // sum over j: B[i] = sum_j A[i,j]
+        // B[0] = A[0,0] + A[0,1] = 1 + 3 = 4
+        // B[1] = A[1,0] + A[1,1] = 2 + 4 = 6
+        assert_eq!(result.shape(), &[2]);
+        assert_eq!(result.to_vec(), vec![4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_sum_all() {
+        // Sum all: A[i,j] -> scalar
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![]; // scalar output
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // sum all = 1 + 2 + 3 + 4 = 10
+        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.to_vec()[0], 10.0);
+    }
+
+    #[test]
+    fn test_unary_naive_partial_trace() {
+        // Partial trace: A[i,j,i] -> B[j] (trace over i, keeping j)
+        // 3D tensor with shape [2, 3, 2]
+        // This is like having a batch of 2x2 matrices and taking the trace of each
+        let data: Vec<f32> = (1..=12).map(|x| x as f32).collect();
+        let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 3, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let ix = vec![0, 1, 0]; // A[i,j,i] - i is repeated at positions 0 and 2
+        let iy = vec![1]; // B[j] - output keeps only j
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // For each j, we sum A[0,j,0] + A[1,j,1]
+        // Column-major layout: data[i + j*2 + k*6]
+        // j=0: A[0,0,0] + A[1,0,1] = data[0] + data[1+0*2+1*6] = data[0] + data[7] = 1 + 8 = 9
+        // j=1: A[0,1,0] + A[1,1,1] = data[0+1*2+0*6] + data[1+1*2+1*6] = data[2] + data[9] = 3 + 10 = 13
+        // j=2: A[0,2,0] + A[1,2,1] = data[0+2*2+0*6] + data[1+2*2+1*6] = data[4] + data[11] = 5 + 12 = 17
+        assert_eq!(result.shape(), &[3]);
+        assert_eq!(result.to_vec(), vec![9.0, 13.0, 17.0]);
+    }
+
+    #[test]
+    fn test_unary_naive_3d_transpose() {
+        // 3D permutation: A[i,j,k] -> B[k,i,j]
+        let data: Vec<f32> = (1..=8).map(|x| x as f32).collect();
+        let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let ix = vec![0, 1, 2]; // A[i,j,k]
+        let iy = vec![2, 0, 1]; // B[k,i,j]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        assert_eq!(result.shape(), &[2, 2, 2]);
+
+        // Verify by checking specific elements
+        // B[k,i,j] = A[i,j,k]
+        // Build expected output manually
+        let mut expected = vec![0.0f32; 8];
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    // A[i,j,k] at position i + j*2 + k*4 in column-major
+                    let a_pos = i + j * 2 + k * 4;
+                    // B[k,i,j] at position k + i*2 + j*4 in column-major
+                    let b_pos = k + i * 2 + j * 4;
+                    expected[b_pos] = data[a_pos];
+                }
+            }
+        }
+        assert_eq!(result.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_unary_naive_identity() {
+        // Identity: A[i,j] -> B[i,j] (no change)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let ix = vec![0, 1]; // A[i,j]
+        let iy = vec![0, 1]; // B[i,j]
+
+        let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), a.to_vec());
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_unary_naive_trace_tropical() {
+        // Trace with max-plus algebra: A[i,i] -> scalar
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let size_dict: HashMap<usize, usize> = [(0, 2)].into();
+        let ix = vec![0, 0]; // A[i,i]
+        let iy = vec![]; // scalar output
+
+        let result = execute_unary_naive::<MaxPlus<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
+
+        // tropical trace = max(A[0,0], A[1,1]) = max(1, 4) = 4
+        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.to_vec()[0], 4.0);
+    }
+
+    #[test]
+    fn test_einsum_trace_optimized() {
+        // Test that the optimized path correctly handles unary trace operations
+        // Matrix (column-major): [[1, 3], [2, 4]]
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        // Optimize and execute
+        ein.optimize_greedy();
+        assert!(ein.is_optimized());
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = A[0,0] + A[1,1] = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_einsum_unary_with_argmax_optimized() {
+        // Test execute_with_argmax for unary operations (optimized path)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        ein.optimize_greedy();
+        let (result, argmax_cache) = ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+        // No argmax for unary operations
+        assert!(argmax_cache.is_empty());
+    }
+
+    #[test]
+    fn test_einsum_unary_pairwise_path() {
+        // Test unary operation through pairwise path (no optimization)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        // Not optimized - uses pairwise path
+        assert!(!ein.is_optimized());
+
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+    }
+
+    #[test]
+    fn test_einsum_unary_with_argmax_pairwise() {
+        // Test execute_with_argmax for unary operations (pairwise path)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+
+        // Not optimized - uses pairwise path
+        let (result, argmax_cache) = ein.execute_with_argmax::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        // trace = 1 + 4 = 5
+        assert_eq!(result.to_vec()[0], 5.0);
+        // No argmax for unary operations
+        assert!(argmax_cache.is_empty());
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_einsum_with_argmax_tropical() {
+        // Test execute_with_argmax for tropical algebra (needs argmax)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2]], vec![0, 2], sizes);
+
+        ein.optimize_greedy();
+        let (result, argmax_cache) = ein.execute_with_argmax::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+
+        // MaxPlus matmul: C[i,k] = max_j(A[i,j] + B[j,k])
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), vec![5.0, 6.0, 7.0, 8.0]);
+
+        // Should have argmax tensors for binary contractions
+        assert!(!argmax_cache.is_empty());
+    }
+
+    #[cfg(feature = "tropical")]
+    #[test]
+    fn test_einsum_with_argmax_tropical_pairwise() {
+        // Test execute_with_argmax for tropical algebra (pairwise path)
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let ein = Einsum::new(vec![vec![0, 1], vec![1, 2]], vec![0, 2], sizes);
+
+        // Not optimized - uses pairwise path
+        let (result, argmax_cache) = ein.execute_with_argmax::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+
+        assert_eq!(result.shape(), &[2, 2]);
+        assert_eq!(result.to_vec(), vec![5.0, 6.0, 7.0, 8.0]);
+
+        // Should have argmax tensors
+        assert!(!argmax_cache.is_empty());
+    }
+
+    #[test]
+    fn test_einsum_transpose_optimized() {
+        // Test transpose operation through optimized path
+        let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1]], vec![1, 0], sizes);
+
+        ein.optimize_greedy();
+        let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
+
+        assert_eq!(result.shape(), &[3, 2]);
+        // A (col-major) = [[1,3,5],[2,4,6]]
+        // A^T = [[1,2],[3,4],[5,6]]
+        // In col-major: [1, 3, 5, 2, 4, 6]
+        assert_eq!(result.to_vec(), vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_intermediate_output_computation() {
+        // Test the compute_intermediate_output function
+        // ij,jk->ik: j is contracted
+        let output = compute_intermediate_output(&[0, 1], &[1, 2], &[0, 2]);
+        assert!(output.contains(&0));
+        assert!(output.contains(&2));
+        assert!(!output.contains(&1));
     }
 }

@@ -8,7 +8,7 @@ mod cpu;
 mod traits;
 
 pub use cpu::Cpu;
-pub use traits::{Backend, Storage};
+pub use traits::{Backend, BackendScalar, Storage};
 
 #[cfg(feature = "cuda")]
 mod cuda;

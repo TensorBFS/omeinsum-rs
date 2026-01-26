@@ -30,6 +30,12 @@ pub trait Storage<T: Scalar>: Clone + Send + Sync + Sized {
     fn zeros(len: usize) -> Self;
 }
 
+/// Marker trait for scalar types supported by a specific backend.
+///
+/// This enables compile-time checking that a scalar type is supported
+/// by a particular backend (e.g., CUDA only supports f32/f64/complex).
+pub trait BackendScalar<B: Backend>: Scalar {}
+
 /// Backend trait for tensor execution.
 ///
 /// Defines how tensor operations are executed on different hardware.
@@ -153,3 +159,6 @@ pub trait Backend: Clone + Send + Sync + 'static {
         n: usize,
     ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>);
 }
+
+// CPU supports all Scalar types
+impl<T: Scalar> BackendScalar<crate::backend::Cpu> for T {}

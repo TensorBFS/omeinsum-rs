@@ -14,21 +14,25 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use omeinsum::Einsum;
+/// ```rust
+/// use omeinsum::{Einsum, Tensor, Cpu};
+/// use omeinsum::algebra::MaxPlus;
 /// use std::collections::HashMap;
 ///
-/// // A[i,j] × B[j,k] × C[k,l] → D[i,l]
-/// let sizes: HashMap<usize, usize> = [(0, 10), (1, 20), (2, 30), (3, 40)].into();
+/// // A[i,j] × B[j,k] → C[i,k]
+/// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+/// let b = Tensor::<f32, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
 ///
+/// let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
 /// let mut ein = Einsum::new(
-///     vec![vec![0, 1], vec![1, 2], vec![2, 3]],
-///     vec![0, 3],
+///     vec![vec![0, 1], vec![1, 2]],
+///     vec![0, 2],
 ///     sizes,
 /// );
 ///
 /// ein.optimize_greedy();
-/// let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a, &b, &c]);
+/// let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+/// assert_eq!(result.shape(), &[2, 2]);
 /// ```
 pub struct Einsum<L: Label = usize> {
     /// Input index labels for each tensor

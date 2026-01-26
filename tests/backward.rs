@@ -3,6 +3,7 @@
 //! These tests verify that gradients are correctly computed for tensor contractions
 //! in both standard and tropical algebras.
 
+use num_complex::Complex64;
 use omeinsum::backend::Cpu;
 use omeinsum::{einsum_with_grad, Standard, Tensor};
 
@@ -251,4 +252,150 @@ fn test_backward_tropical_different_winners() {
     // grad_B[1,1] = 0 (j=1 never won for col k=1)
     // In column-major: [1, 1, 2, 0]
     assert_eq!(grad_b.to_vec(), vec![1.0, 1.0, 2.0, 0.0]);
+}
+
+// ============================================================================
+// f64 precision tests
+// ============================================================================
+
+#[test]
+fn test_backward_matmul_f64() {
+    // Test with f64 for higher precision
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    // Same as f32 test but with f64
+    assert_eq!(result.to_vec(), vec![7.0, 10.0, 15.0, 22.0]);
+
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
+    let grads = grad_fn.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+
+    assert_eq!(grads.len(), 2);
+    assert_eq!(grads[0].to_vec(), vec![4.0, 4.0, 6.0, 6.0]);
+    assert_eq!(grads[1].to_vec(), vec![3.0, 7.0, 3.0, 7.0]);
+}
+
+#[test]
+fn test_backward_large_values_f64() {
+    // Test with large values where f64 precision matters
+    let a = Tensor::<f64, Cpu>::from_data(&[1e10, 2e10, 3e10, 4e10], &[2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    // Verify result is computed correctly
+    assert_eq!(result.shape(), &[2, 2]);
+    
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
+    let grads = grad_fn.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+    
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    assert_eq!(grads[1].shape(), &[2, 2]);
+}
+
+// ============================================================================
+// Complex64 tests
+// ============================================================================
+
+#[test]
+fn test_backward_matmul_complex64() {
+    // Test gradient computation with complex numbers
+    // A = [[1+i, 2], [3, 4-i]] in column-major: [1+i, 3, 2, 4-i]
+    let a = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(4.0, -1.0),
+        ],
+        &[2, 2],
+    );
+    // B = [[1, 0], [0, 1]] identity in column-major: [1, 0, 0, 1]
+    let b = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    );
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<Complex64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    // A @ I = A
+    let result_vec = result.to_vec();
+    assert!((result_vec[0].re - 1.0).abs() < 1e-10);
+    assert!((result_vec[0].im - 1.0).abs() < 1e-10);
+    assert!((result_vec[1].re - 3.0).abs() < 1e-10);
+    assert!((result_vec[2].re - 2.0).abs() < 1e-10);
+    assert!((result_vec[3].re - 4.0).abs() < 1e-10);
+    assert!((result_vec[3].im - (-1.0)).abs() < 1e-10);
+
+    let grad_out = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let grads = grad_fn.backward::<Standard<Complex64>>(&grad_out, &[&a, &b]);
+
+    assert_eq!(grads.len(), 2);
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    assert_eq!(grads[1].shape(), &[2, 2]);
+}
+
+#[test]
+fn test_backward_complex64_nontrivial() {
+    // Test with non-trivial complex numbers and gradients
+    let a = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 1.0),   // 1+i
+            Complex64::new(2.0, -1.0),  // 2-i
+        ],
+        &[2, 1],
+    );
+    let b = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),   // 1
+            Complex64::new(0.0, 1.0),   // i
+        ],
+        &[1, 2],
+    );
+
+    // Outer product: C[i,j] = A[i] * B[j]
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<Complex64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    // C[0,0] = (1+i) * 1 = 1+i
+    // C[1,0] = (2-i) * 1 = 2-i
+    // C[0,1] = (1+i) * i = i + i² = i - 1 = -1+i
+    // C[1,1] = (2-i) * i = 2i - i² = 2i + 1 = 1+2i
+    let result_vec = result.to_vec();
+    assert!((result_vec[0] - Complex64::new(1.0, 1.0)).norm() < 1e-10);
+    assert!((result_vec[1] - Complex64::new(2.0, -1.0)).norm() < 1e-10);
+    assert!((result_vec[2] - Complex64::new(-1.0, 1.0)).norm() < 1e-10);
+    assert!((result_vec[3] - Complex64::new(1.0, 2.0)).norm() < 1e-10);
+
+    let grad_out = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let grads = grad_fn.backward::<Standard<Complex64>>(&grad_out, &[&a, &b]);
+
+    assert_eq!(grads[0].shape(), &[2, 1]);
+    assert_eq!(grads[1].shape(), &[1, 2]);
 }

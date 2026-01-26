@@ -7,11 +7,145 @@ mod storage;
 
 pub use storage::CudaStorage;
 
-use crate::algebra::Scalar;
 use cudarc::driver::CudaDevice;
 use cutensor::{contract, CacheKey, CutensorType, Handle, PlanCache, TensorDesc};
+use num_complex::Complex;
 use std::cell::RefCell;
 use std::sync::Arc;
+
+// ============================================================================
+// CUDA-compatible complex number wrapper
+// ============================================================================
+//
+// Due to Rust's orphan rule, we cannot implement cudarc traits for num_complex
+// types directly. This generic newtype wrapper provides CUDA-compatible complex.
+
+/// CUDA-compatible wrapper for complex numbers.
+///
+/// This type has the same memory layout as `num_complex::Complex<T>` and CUDA's
+/// complex types, but can implement cudarc traits since it's a local type.
+///
+/// Use `CudaComplex<f32>` for single-precision and `CudaComplex<f64>` for double.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct CudaComplex<T>(pub Complex<T>);
+
+impl<T> CudaComplex<T> {
+    /// Create a new CudaComplex from real and imaginary parts.
+    pub fn new(re: T, im: T) -> Self {
+        CudaComplex(Complex::new(re, im))
+    }
+
+    /// Get the real part.
+    pub fn re(&self) -> T
+    where
+        T: Clone,
+    {
+        self.0.re.clone()
+    }
+
+    /// Get the imaginary part.
+    pub fn im(&self) -> T
+    where
+        T: Clone,
+    {
+        self.0.im.clone()
+    }
+}
+
+// SAFETY: CudaComplex<T> is repr(transparent) over Complex<T>, which is repr(C)
+// with two T fields. This is compatible with CUDA's complex types.
+unsafe impl<T: cudarc::driver::DeviceRepr> cudarc::driver::DeviceRepr for CudaComplex<T> {}
+// SAFETY: Zero-initialized CudaComplex<T> is valid if T is valid as zero bits.
+unsafe impl<T: cudarc::driver::ValidAsZeroBits> cudarc::driver::ValidAsZeroBits for CudaComplex<T> {}
+
+// Arithmetic for CudaComplex<f32>
+impl std::ops::Add for CudaComplex<f32> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        CudaComplex(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Mul for CudaComplex<f32> {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        CudaComplex(self.0 * rhs.0)
+    }
+}
+
+impl num_traits::Zero for CudaComplex<f32> {
+    fn zero() -> Self {
+        CudaComplex(Complex::new(0.0, 0.0))
+    }
+    fn is_zero(&self) -> bool {
+        self.0.re == 0.0 && self.0.im == 0.0
+    }
+}
+
+impl num_traits::One for CudaComplex<f32> {
+    fn one() -> Self {
+        CudaComplex(Complex::new(1.0, 0.0))
+    }
+}
+
+// Arithmetic for CudaComplex<f64>
+impl std::ops::Add for CudaComplex<f64> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        CudaComplex(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Mul for CudaComplex<f64> {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        CudaComplex(self.0 * rhs.0)
+    }
+}
+
+impl num_traits::Zero for CudaComplex<f64> {
+    fn zero() -> Self {
+        CudaComplex(Complex::new(0.0, 0.0))
+    }
+    fn is_zero(&self) -> bool {
+        self.0.re == 0.0 && self.0.im == 0.0
+    }
+}
+
+impl num_traits::One for CudaComplex<f64> {
+    fn one() -> Self {
+        CudaComplex(Complex::new(1.0, 0.0))
+    }
+}
+
+// CutensorType implementations
+impl CutensorType for CudaComplex<f32> {
+    const DATA: cutensor::sys::cutensorDataType_t = cutensor::sys::cutensorDataType_t::C_32F;
+    fn compute_desc() -> cutensor::sys::cutensorComputeDescriptor_t {
+        unsafe { cutensor::sys::CUTENSOR_COMPUTE_DESC_32F }
+    }
+}
+
+impl CutensorType for CudaComplex<f64> {
+    const DATA: cutensor::sys::cutensorDataType_t = cutensor::sys::cutensorDataType_t::C_64F;
+    fn compute_desc() -> cutensor::sys::cutensorComputeDescriptor_t {
+        unsafe { cutensor::sys::CUTENSOR_COMPUTE_DESC_64F }
+    }
+}
+
+// Conversion traits
+impl<T> From<Complex<T>> for CudaComplex<T> {
+    fn from(c: Complex<T>) -> Self {
+        CudaComplex(c)
+    }
+}
+
+impl<T> From<CudaComplex<T>> for Complex<T> {
+    fn from(c: CudaComplex<T>) -> Self {
+        c.0
+    }
+}
 
 /// CUDA backend for GPU tensor operations.
 ///
@@ -36,7 +170,7 @@ impl Cuda {
     pub fn on_device(ordinal: usize) -> Result<Self, CudaError> {
         let device = CudaDevice::new(ordinal).map_err(|e| CudaError::Device(e.to_string()))?;
         Ok(Self {
-            device: Arc::new(device),
+            device,
             handle: RefCell::new(None),
             cache: RefCell::new(PlanCache::new(64)),
         })
@@ -48,7 +182,7 @@ impl Cuda {
     }
 
     /// Get a reference to the cuTENSOR handle, initializing it lazily if needed.
-    fn get_handle(&self) -> Result<std::cell::Ref<Handle>, CudaError> {
+    fn get_handle(&self) -> Result<std::cell::Ref<'_, Handle>, CudaError> {
         {
             let mut h = self.handle.borrow_mut();
             if h.is_none() {
@@ -99,7 +233,7 @@ impl Cuda {
         modes_c: &[i32],
     ) -> Result<CudaStorage<T>, CudaError>
     where
-        T: Scalar + CutensorType + cudarc::driver::DeviceRepr + num_traits::One + num_traits::Zero,
+        T: CutensorType + cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits + num_traits::One + num_traits::Zero,
     {
         // Create tensor descriptors
         let handle = self.get_handle()?;
@@ -111,6 +245,9 @@ impl Cuda {
         let desc_c = TensorDesc::new::<T>(&handle, shape_c, strides_c)
             .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
 
+        // Need to drop handle borrow before borrowing cache mutably
+        drop(handle);
+
         // Build cache key
         let key = CacheKey {
             shapes: vec![shape_a.to_vec(), shape_b.to_vec(), shape_c.to_vec()],
@@ -119,19 +256,6 @@ impl Cuda {
             dtype: T::DATA as u32,
         };
 
-        // Get or create the execution plan from cache
-        // Need to drop handle borrow before borrowing cache mutably
-        drop(handle);
-
-        let handle = self.get_handle()?;
-        let plan = self
-            .cache
-            .borrow_mut()
-            .get_or_create::<T>(
-                &handle, key, &desc_a, modes_a, &desc_b, modes_b, &desc_c, modes_c,
-            )
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
-
         // Allocate output storage
         let len: usize = shape_c.iter().product();
         let mut c = self
@@ -139,9 +263,21 @@ impl Cuda {
             .alloc_zeros::<T>(len)
             .map_err(|e| CudaError::Alloc(e.to_string()))?;
 
-        // Execute the contraction
-        contract::<T>(&handle, plan, T::one(), a.slice(), b.slice(), &mut c)
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+        // Get or create the execution plan from cache and execute contraction
+        // Keep the cache borrow alive during the contract call
+        {
+            let handle = self.get_handle()?;
+            let mut cache = self.cache.borrow_mut();
+            let plan = cache
+                .get_or_create::<T>(
+                    &handle, key, &desc_a, modes_a, &desc_b, modes_b, &desc_c, modes_c,
+                )
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+
+            // Execute the contraction
+            contract::<T>(&handle, plan, T::one(), a.slice(), b.slice(), &mut c)
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+        }
 
         Ok(CudaStorage::new(c, self.device.clone()))
     }

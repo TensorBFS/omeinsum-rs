@@ -10,7 +10,7 @@ use super::Einsum;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use omeinsum::EinBuilder;
 ///
 /// let ein = EinBuilder::new()
@@ -100,10 +100,16 @@ impl<L: Label> EinBuilder<L> {
 
 /// Convenience macro for creating einsum specifications.
 ///
+/// Note: This macro uses identifier patterns for labels (like `i`, `j`, `k`),
+/// not numeric literals.
+///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use omeinsum::ein;
+///
 /// // A[i,j] × B[j,k] → C[i,k]
+/// let (i, j, k) = (0, 1, 2);
 /// let ein = ein!([i, j], [j, k] -> [i, k]; i=10, j=20, k=30);
 /// ```
 #[macro_export]

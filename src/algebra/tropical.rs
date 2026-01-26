@@ -26,8 +26,8 @@ use num_traits::{Bounded, One, Zero};
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use omeinsum::algebra::MaxPlus;
+/// ```rust
+/// use omeinsum::algebra::{MaxPlus, Semiring};
 ///
 /// let a = MaxPlus(2.0f32);
 /// let b = MaxPlus(3.0f32);

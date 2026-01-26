@@ -24,15 +24,16 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use omeinsum::{einsum, Tensor, Cpu};
 /// use omeinsum::algebra::MaxPlus;
 ///
-/// let a = Tensor::<f32, Cpu>::from_data(&data_a, &[2, 3]);
-/// let b = Tensor::<f32, Cpu>::from_data(&data_b, &[3, 4]);
+/// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+/// let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0], &[3, 4]);
 ///
 /// // C[i,k] = max_j (A[i,j] + B[j,k])
 /// let c = einsum::<MaxPlus<f32>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+/// assert_eq!(c.shape(), &[2, 4]);
 /// ```
 pub fn einsum<A, T, B>(tensors: &[&Tensor<T, B>], ixs: &[&[usize]], iy: &[usize]) -> Tensor<T, B>
 where

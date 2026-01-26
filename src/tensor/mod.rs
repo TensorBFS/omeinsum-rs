@@ -27,7 +27,7 @@ pub use view::TensorView;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use omeinsum::{Tensor, Cpu};
 ///
 /// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
@@ -251,7 +251,7 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use omeinsum::{Tensor, Cpu};
     ///
     /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
@@ -290,9 +290,13 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// use omeinsum::{Tensor, Cpu};
+    ///
+    /// let data: Vec<f32> = (0..24).map(|x| x as f32).collect();
     /// let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 3, 4]);
     /// let b = a.permute(&[2, 0, 1]);  // Shape becomes [4, 2, 3]
+    /// assert_eq!(b.shape(), &[4, 2, 3]);
     /// ```
     pub fn permute(&self, axes: &[usize]) -> Self {
         assert_eq!(
@@ -343,10 +347,14 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let a = Tensor::<f32, Cpu>::from_data(&data, &[2, 3]);
+    /// ```rust
+    /// use omeinsum::{Tensor, Cpu};
+    ///
+    /// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     /// let b = a.reshape(&[6]);      // Flatten
     /// let c = a.reshape(&[3, 2]);   // Different shape, same data
+    /// assert_eq!(b.shape(), &[6]);
+    /// assert_eq!(c.shape(), &[3, 2]);
     /// ```
     pub fn reshape(&self, new_shape: &[usize]) -> Self {
         let old_numel: usize = self.shape.iter().product();
@@ -405,7 +413,7 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use omeinsum::{Tensor, Cpu, Standard};
     ///
     /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
@@ -435,13 +443,16 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use omeinsum::{Tensor, Cpu, Standard};
     ///
+    /// // Column-major: data [1, 2, 3, 4] with shape [2, 2] represents:
+    /// // [[1, 3],
+    /// //  [2, 4]]
     /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    /// // Sum over axis 1 (columns): [1+2, 3+4] = [3, 7]
+    /// // Sum over axis 1 (columns): [1+3, 2+4] = [4, 6]
     /// let result = t.sum_axis::<Standard<f32>>(1);
-    /// assert_eq!(result.to_vec(), vec![3.0, 7.0]);
+    /// assert_eq!(result.to_vec(), vec![4.0, 6.0]);
     /// ```
     pub fn sum_axis<A: Algebra<Scalar = T>>(&self, axis: usize) -> Self
     where
@@ -510,7 +521,7 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use omeinsum::{Tensor, Cpu};
     ///
     /// let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);

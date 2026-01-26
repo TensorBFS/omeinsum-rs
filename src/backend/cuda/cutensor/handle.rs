@@ -55,28 +55,36 @@ impl Drop for Handle {
 pub trait CutensorType: Copy {
     /// The cuTENSOR data type for this Rust type.
     const DATA: cutensorDataType_t;
-    /// The cuTENSOR compute descriptor for operations on this type.
-    const COMPUTE: cutensorComputeDescriptor_t;
+    /// Get the cuTENSOR compute descriptor for operations on this type.
+    fn compute_desc() -> cutensorComputeDescriptor_t;
 }
 
 impl CutensorType for f32 {
     const DATA: cutensorDataType_t = cutensorDataType_t::R_32F;
-    const COMPUTE: cutensorComputeDescriptor_t = cutensorComputeDescriptor_t::COMPUTE_32F;
+    fn compute_desc() -> cutensorComputeDescriptor_t {
+        unsafe { super::sys::CUTENSOR_COMPUTE_DESC_32F }
+    }
 }
 
 impl CutensorType for f64 {
     const DATA: cutensorDataType_t = cutensorDataType_t::R_64F;
-    const COMPUTE: cutensorComputeDescriptor_t = cutensorComputeDescriptor_t::COMPUTE_64F;
+    fn compute_desc() -> cutensorComputeDescriptor_t {
+        unsafe { super::sys::CUTENSOR_COMPUTE_DESC_64F }
+    }
 }
 
 impl CutensorType for Complex32 {
     const DATA: cutensorDataType_t = cutensorDataType_t::C_32F;
-    const COMPUTE: cutensorComputeDescriptor_t = cutensorComputeDescriptor_t::COMPUTE_32F;
+    fn compute_desc() -> cutensorComputeDescriptor_t {
+        unsafe { super::sys::CUTENSOR_COMPUTE_DESC_32F }
+    }
 }
 
 impl CutensorType for Complex64 {
     const DATA: cutensorDataType_t = cutensorDataType_t::C_64F;
-    const COMPUTE: cutensorComputeDescriptor_t = cutensorComputeDescriptor_t::COMPUTE_64F;
+    fn compute_desc() -> cutensorComputeDescriptor_t {
+        unsafe { super::sys::CUTENSOR_COMPUTE_DESC_64F }
+    }
 }
 
 /// Safe wrapper for a cuTENSOR tensor descriptor.
@@ -108,6 +116,8 @@ impl TensorDesc {
         let extent: Vec<i64> = shape.iter().map(|&s| s as i64).collect();
         let stride: Vec<i64> = strides.iter().map(|&s| s as i64).collect();
         let mut raw = std::ptr::null_mut();
+        // Alignment of 128 bytes is recommended for best performance
+        const ALIGNMENT: u32 = 128;
         check(unsafe {
             cutensorCreateTensorDescriptor(
                 handle.raw(),
@@ -116,7 +126,7 @@ impl TensorDesc {
                 extent.as_ptr(),
                 stride.as_ptr(),
                 T::DATA,
-                0,
+                ALIGNMENT,
             )
         })?;
         Ok(Self { raw })
@@ -173,6 +183,8 @@ impl Plan {
         desc_c: &TensorDesc,
         modes_c: &[i32],
     ) -> Result<Self, CutensorError> {
+        let compute = T::compute_desc();
+
         // Create operation descriptor
         let mut op = std::ptr::null_mut();
         check(unsafe {
@@ -181,24 +193,23 @@ impl Plan {
                 &mut op,
                 desc_a.raw(),
                 modes_a.as_ptr(),
-                0,
+                super::sys::cutensorOperator_t::IDENTITY,
                 desc_b.raw(),
                 modes_b.as_ptr(),
-                0,
+                super::sys::cutensorOperator_t::IDENTITY,
                 desc_c.raw(),
                 modes_c.as_ptr(),
-                0,
+                super::sys::cutensorOperator_t::IDENTITY,
                 desc_c.raw(),
                 modes_c.as_ptr(),
-                0,
-                T::COMPUTE,
+                compute,
             )
         })?;
 
         // Create plan preference
         let mut pref = std::ptr::null_mut();
         check(unsafe {
-            cutensorCreatePlanPreference(handle.raw(), &mut pref, ALGO_DEFAULT, JIT_MODE_NONE)
+            cutensorCreatePlanPreference(handle.raw(), &mut pref, super::sys::cutensorAlgo_t::DEFAULT, super::sys::cutensorJitMode_t::NONE)
         })?;
 
         // Estimate workspace

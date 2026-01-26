@@ -190,11 +190,235 @@ fn test_bayesian_network_marginals() {
 }
 
 // ============================================================================
-// Example 2: Tensor Train Ground State (Complex Numbers)
+// Example 2: Tensor Network Gradient Verification
 // ============================================================================
 //
-// Find ground state of 5-site Heisenberg chain using MPS ansatz.
-// Gradient ∂E/∂A gives optimization direction.
+// This example demonstrates that einsum gradients are computed correctly
+// by comparing autodiff gradients against finite differences.
+
+/// Verify einsum gradients match finite differences.
+///
+/// This is the fundamental test for gradient correctness:
+/// 1. Compute forward pass with einsum
+/// 2. Compute gradients with einsum_with_grad
+/// 3. Compare against numerical finite differences
+#[test]
+fn test_einsum_gradient_verification() {
+    let eps = 1e-6;
+    let tol = 1e-4;
+
+    println!("\n=== Einsum Gradient Verification ===");
+    println!("Comparing autodiff gradients vs finite differences\n");
+
+    // Test 1: Matrix multiplication C = A @ B
+    // ∂C/∂A = grad_C @ B.T
+    // ∂C/∂B = A.T @ grad_C
+    println!("Test 1: Matrix multiplication (ij,jk->ik)");
+    {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[3, 2]);
+
+        let (_result, grad_fn) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+        // Compute with gradient output = all ones
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b]);
+
+        // Verify gradient of A via finite differences
+        let a_data = a.to_vec();
+        let mut max_diff_a = 0.0f64;
+
+        for i in 0..a_data.len() {
+            let mut a_plus = a_data.clone();
+            a_plus[i] += eps;
+            let a_plus_t = Tensor::<f64, Cpu>::from_data(&a_plus, &[2, 3]);
+
+            let mut a_minus = a_data.clone();
+            a_minus[i] -= eps;
+            let a_minus_t = Tensor::<f64, Cpu>::from_data(&a_minus, &[2, 3]);
+
+            let r_plus = einsum::<Standard<f64>, _, _>(&[&a_plus_t, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+            let r_minus = einsum::<Standard<f64>, _, _>(&[&a_minus_t, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+            // Finite diff gradient for element i
+            let fd_grad: f64 = r_plus
+                .to_vec()
+                .iter()
+                .zip(r_minus.to_vec().iter())
+                .zip(grad_output.to_vec().iter())
+                .map(|((p, m), g)| g * (p - m) / (2.0 * eps))
+                .sum();
+
+            let autodiff_grad = grads[0].to_vec()[i];
+            let diff = (fd_grad - autodiff_grad).abs();
+            max_diff_a = max_diff_a.max(diff);
+        }
+
+        println!("  Gradient of A: max diff = {:.2e} (tol = {:.0e})", max_diff_a, tol);
+        assert!(max_diff_a < tol, "Gradient of A exceeds tolerance");
+
+        // Verify gradient of B via finite differences
+        let b_data = b.to_vec();
+        let mut max_diff_b = 0.0f64;
+
+        for i in 0..b_data.len() {
+            let mut b_plus = b_data.clone();
+            b_plus[i] += eps;
+            let b_plus_t = Tensor::<f64, Cpu>::from_data(&b_plus, &[3, 2]);
+
+            let mut b_minus = b_data.clone();
+            b_minus[i] -= eps;
+            let b_minus_t = Tensor::<f64, Cpu>::from_data(&b_minus, &[3, 2]);
+
+            let r_plus = einsum::<Standard<f64>, _, _>(&[&a, &b_plus_t], &[&[0, 1], &[1, 2]], &[0, 2]);
+            let r_minus = einsum::<Standard<f64>, _, _>(&[&a, &b_minus_t], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+            let fd_grad: f64 = r_plus
+                .to_vec()
+                .iter()
+                .zip(r_minus.to_vec().iter())
+                .zip(grad_output.to_vec().iter())
+                .map(|((p, m), g)| g * (p - m) / (2.0 * eps))
+                .sum();
+
+            let autodiff_grad = grads[1].to_vec()[i];
+            let diff = (fd_grad - autodiff_grad).abs();
+            max_diff_b = max_diff_b.max(diff);
+        }
+
+        println!("  Gradient of B: max diff = {:.2e} (tol = {:.0e})", max_diff_b, tol);
+        assert!(max_diff_b < tol, "Gradient of B exceeds tolerance");
+        println!("  ✓ Matrix multiplication gradients verified");
+    }
+
+    // Test 2: Trace (unary) - ii->
+    println!("\nTest 2: Trace (ii->)");
+    {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let (result, grad_fn) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
+
+        assert_eq!(result.to_vec(), vec![5.0]); // trace = 1 + 4
+
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a]);
+
+        // Gradient should be identity matrix: [[1,0],[0,1]] in col-major: [1,0,0,1]
+        let expected_grad = vec![1.0, 0.0, 0.0, 1.0];
+        let autodiff_grad = grads[0].to_vec();
+
+        // Verify via finite differences
+        let a_data = a.to_vec();
+        let mut max_diff = 0.0f64;
+
+        for i in 0..a_data.len() {
+            let mut a_plus = a_data.clone();
+            a_plus[i] += eps;
+            let a_plus_t = Tensor::<f64, Cpu>::from_data(&a_plus, &[2, 2]);
+
+            let mut a_minus = a_data.clone();
+            a_minus[i] -= eps;
+            let a_minus_t = Tensor::<f64, Cpu>::from_data(&a_minus, &[2, 2]);
+
+            let r_plus = einsum::<Standard<f64>, _, _>(&[&a_plus_t], &[&[0, 0]], &[]);
+            let r_minus = einsum::<Standard<f64>, _, _>(&[&a_minus_t], &[&[0, 0]], &[]);
+
+            let fd_grad = (r_plus.to_vec()[0] - r_minus.to_vec()[0]) / (2.0 * eps);
+            let diff = (fd_grad - autodiff_grad[i]).abs();
+            max_diff = max_diff.max(diff);
+        }
+
+        println!("  Autodiff gradient: {:?}", autodiff_grad);
+        println!("  Expected gradient: {:?}", expected_grad);
+        println!("  Finite diff max error: {:.2e}", max_diff);
+        assert!(max_diff < tol, "Trace gradient exceeds tolerance");
+        assert_eq!(autodiff_grad, expected_grad);
+        println!("  ✓ Trace gradients verified");
+    }
+
+    // Test 3: Sum reduction (ij->)
+    println!("\nTest 3: Sum reduction (ij->)");
+    {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+        let (result, grad_fn) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[]);
+
+        assert_eq!(result.to_vec(), vec![21.0]); // sum all = 21
+
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a]);
+
+        // Gradient should be all ones
+        let expected_grad = vec![1.0; 6];
+        let autodiff_grad = grads[0].to_vec();
+
+        assert_eq!(autodiff_grad, expected_grad);
+        println!("  Autodiff gradient: all ones ✓");
+        println!("  ✓ Sum reduction gradients verified");
+    }
+
+    // Test 4: Batched contraction (bij,bjk->bik)
+    // Verifies gradient shapes and chain rule consistency
+    println!("\nTest 4: Batched matrix multiply (bij,bjk->bik)");
+    {
+        // Batch of 2, each 2x3 @ 3x2
+        let a = Tensor::<f64, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[2, 2, 3],
+        );
+        let b = Tensor::<f64, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[2, 3, 2],
+        );
+
+        let (_result, grad_fn) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3]);
+
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0; 8], &[2, 2, 2]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b]);
+
+        // Verify gradient shapes match input shapes
+        assert_eq!(grads[0].shape(), a.shape(), "Gradient A shape mismatch");
+        assert_eq!(grads[1].shape(), b.shape(), "Gradient B shape mismatch");
+
+        // Verify gradients are non-zero (chain rule is working)
+        let grad_a_sum: f64 = grads[0].to_vec().iter().sum();
+        let grad_b_sum: f64 = grads[1].to_vec().iter().sum();
+        assert!(grad_a_sum > 0.0, "Gradient A should be non-zero");
+        assert!(grad_b_sum > 0.0, "Gradient B should be non-zero");
+
+        // Verify via simple finite difference on total loss
+        let loss_orig: f64 = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3])
+            .to_vec().iter().sum();
+
+        // Perturb all elements of A slightly
+        let a_perturbed_data: Vec<f64> = a.to_vec().iter().map(|x| x + eps).collect();
+        let a_perturbed = Tensor::<f64, Cpu>::from_data(&a_perturbed_data, &[2, 2, 3]);
+        let loss_perturbed: f64 = einsum::<Standard<f64>, _, _>(&[&a_perturbed, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3])
+            .to_vec().iter().sum();
+
+        // The change in loss should approximately equal sum(grad_a) * eps
+        let predicted_change = grad_a_sum * eps;
+        let actual_change = loss_perturbed - loss_orig;
+        let rel_error = ((actual_change - predicted_change) / predicted_change).abs();
+
+        println!("  Gradient A shape: {:?} ✓", grads[0].shape());
+        println!("  Gradient B shape: {:?} ✓", grads[1].shape());
+        println!("  Predicted Δloss: {:.6}, Actual Δloss: {:.6}, rel_error: {:.2e}",
+                 predicted_change, actual_change, rel_error);
+        assert!(rel_error < 0.01, "Batched gradient direction incorrect");
+        println!("  ✓ Batched contraction gradients verified");
+    }
+
+    println!("\n=== All Gradient Verifications Passed ===\n");
+}
+
+// ============================================================================
+// Example 2b: Tensor Train Complex Contraction (simple demonstration)
+// ============================================================================
 
 /// Test complex tensor contraction for MPS-like structure.
 ///

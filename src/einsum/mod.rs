@@ -52,6 +52,9 @@ where
 ///
 /// Returns `(result, gradient_fn)` where `gradient_fn` can be called
 /// with the output gradient to compute input gradients.
+///
+/// For Standard algebra, gradients are computed via einsum (no argmax tracking needed).
+/// For tropical algebras, argmax is tracked during forward pass for gradient routing.
 pub fn einsum_with_grad<A, T, B>(
     tensors: &[&Tensor<T, B>],
     ixs: &[&[usize]],
@@ -68,7 +71,13 @@ where
     let mut ein = Einsum::new(ixs_owned.clone(), iy.to_vec(), size_dict);
     ein.optimize_greedy();
 
-    let (result, argmax_cache) = ein.execute_with_argmax::<A, T, B>(tensors);
+    // Only track argmax for algebras that need it (tropical algebras)
+    // Standard algebra computes gradients via einsum, no argmax needed
+    let (result, argmax_cache) = if A::needs_argmax() {
+        ein.execute_with_argmax::<A, T, B>(tensors)
+    } else {
+        (ein.execute::<A, T, B>(tensors), Vec::new())
+    };
 
     let gradient = EinsumGradient {
         ixs: ixs_owned,

@@ -18,6 +18,9 @@ pub use standard::Standard;
 #[cfg(feature = "tropical")]
 pub use tropical::{MaxMul, MaxPlus, MinPlus};
 
+// Re-export complex types for convenience
+pub use num_complex::{Complex32, Complex64};
+
 /// Marker trait for scalar types that can be used in tensors.
 pub trait Scalar:
     Copy + Clone + Send + Sync + Default + std::fmt::Debug + 'static + bytemuck::Pod + std::ops::AddAssign
@@ -30,3 +33,5 @@ impl Scalar for i32 {}
 impl Scalar for i64 {}
 impl Scalar for u32 {}
 impl Scalar for u64 {}
+impl Scalar for Complex32 {}
+impl Scalar for Complex64 {}

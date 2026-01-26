@@ -632,3 +632,259 @@ fn test_single_element_tensors() {
     assert_eq!(c.shape(), &[1, 1]);
     assert_eq!(c.to_vec(), vec![15.0]);
 }
+
+// ============================================================================
+// Tropical Unary Gradient Tests
+// ============================================================================
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_trace_gradient() {
+    // Test gradient of tropical trace: ii-> (max of diagonal)
+    // Forward: max(A[0,0], A[1,1]) = max(1, 4) = 4
+    // Backward: gradient goes only to the winner (position (1,1))
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
+
+    // max(diagonal) = max(1, 4) = 4
+    assert_eq!(c.to_vec(), vec![4.0]);
+
+    // Backward: only the winner (1,1) = position 3 gets the gradient
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    // Only position 3 (which is (1,1) in col-major) gets gradient
+    assert_eq!(grads[0].to_vec(), vec![0.0, 0.0, 0.0, 1.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_sum_gradient() {
+    // Test gradient of tropical sum: ij-> (global max)
+    // Forward: max of all elements
+    // Backward: gradient goes only to the global max position
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 5.0, 3.0, 2.0, 4.0, 6.0], &[2, 3]);
+    // col-major layout: [[1,3,4],[5,2,6]] so max is 6 at position 5
+
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 1]], &[]);
+
+    // Global max = 6
+    assert_eq!(c.to_vec(), vec![6.0]);
+
+    // Backward: only position 5 (the max) gets gradient
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    assert_eq!(grads[0].to_vec(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_row_max_gradient() {
+    // Test gradient of tropical row max: ij->i
+    // Forward: max over j for each i
+    // Backward: gradient goes only to the argmax column for each row
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 4.0, 3.0, 2.0, 5.0, 6.0], &[2, 3]);
+    // col-major: [[1,3,5],[4,2,6]]
+    // row 0: max(1,3,5) = 5 at j=2
+    // row 1: max(4,2,6) = 6 at j=2
+
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 1]], &[0]);
+
+    // Row maxes: [5, 6]
+    assert_eq!(c.to_vec(), vec![5.0, 6.0]);
+
+    // Backward: grad = [1, 1]
+    // Row 0 winner is position 4 (j=2, i=0)
+    // Row 1 winner is position 5 (j=2, i=1)
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    assert_eq!(grads[0].to_vec(), vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_col_max_gradient() {
+    // Test gradient of tropical column max: ij->j
+    // Forward: max over i for each j
+    // Backward: gradient goes only to the argmax row for each column
+    use omeinsum::MaxPlus;
+
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 4.0, 3.0, 2.0, 5.0, 6.0], &[2, 3]);
+    // col-major: [[1,3,5],[4,2,6]]
+    // col 0: max(1,4) = 4 at i=1
+    // col 1: max(3,2) = 3 at i=0
+    // col 2: max(5,6) = 6 at i=1
+
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 1]], &[1]);
+
+    // Column maxes: [4, 3, 6]
+    assert_eq!(c.to_vec(), vec![4.0, 3.0, 6.0]);
+
+    // Backward: grad = [1, 2, 3]
+    // col 0 winner at position 1 gets grad 1
+    // col 1 winner at position 2 gets grad 2
+    // col 2 winner at position 5 gets grad 3
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0], &[3]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    assert_eq!(grads[0].to_vec(), vec![0.0, 1.0, 2.0, 0.0, 0.0, 3.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_minplus_trace_gradient() {
+    // Test MinPlus trace gradient: ii-> (min of diagonal)
+    use omeinsum::MinPlus;
+
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    // Diagonal: [1, 4], min = 1 at position 0
+
+    let (c, grad_fn) = einsum_with_grad::<MinPlus<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
+
+    // min(diagonal) = 1
+    assert_eq!(c.to_vec(), vec![1.0]);
+
+    // Backward: only position 0 (which is (0,0)) gets gradient
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+    let grads = grad_fn.backward::<MinPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    assert_eq!(grads[0].to_vec(), vec![1.0, 0.0, 0.0, 0.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_minplus_sum_gradient() {
+    // Test MinPlus global min: ij-> (global min)
+    use omeinsum::MinPlus;
+
+    let a = Tensor::<f64, Cpu>::from_data(&[5.0, 1.0, 3.0, 4.0, 2.0, 6.0], &[2, 3]);
+    // col-major layout, global min is 1 at position 1
+
+    let (c, grad_fn) = einsum_with_grad::<MinPlus<f64>, _, _>(&[&a], &[&[0, 1]], &[]);
+
+    // Global min = 1
+    assert_eq!(c.to_vec(), vec![1.0]);
+
+    // Backward: only position 1 (the min) gets gradient
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[2.0], &[]);
+    let grads = grad_fn.backward::<MinPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    assert_eq!(grads[0].to_vec(), vec![0.0, 2.0, 0.0, 0.0, 0.0, 0.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_minplus_row_min_gradient() {
+    // Test MinPlus row min: ij->i
+    use omeinsum::MinPlus;
+
+    let a = Tensor::<f64, Cpu>::from_data(&[3.0, 1.0, 2.0, 4.0, 5.0, 6.0], &[2, 3]);
+    // col-major: [[3,2,5],[1,4,6]]
+    // row 0: min(3,2,5) = 2 at j=1 (position 2)
+    // row 1: min(1,4,6) = 1 at j=0 (position 1)
+
+    let (c, grad_fn) = einsum_with_grad::<MinPlus<f64>, _, _>(&[&a], &[&[0, 1]], &[0]);
+
+    // Row mins: [2, 1]
+    assert_eq!(c.to_vec(), vec![2.0, 1.0]);
+
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+    let grads = grad_fn.backward::<MinPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    // Position 1 (row 1, j=0) and position 2 (row 0, j=1) get gradients
+    assert_eq!(grads[0].to_vec(), vec![0.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_single_element_gradient() {
+    // Test gradient with single-element tensor
+    use omeinsum::MaxPlus;
+
+    let a = Tensor::<f64, Cpu>::from_data(&[42.0], &[1, 1]);
+
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 1]], &[]);
+
+    assert_eq!(c.to_vec(), vec![42.0]);
+
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[5.0], &[]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[1, 1]);
+    assert_eq!(grads[0].to_vec(), vec![5.0]);
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_3d_max_gradient() {
+    // Test gradient with 3D tensor: ijk->i (max over j,k for each i)
+    use omeinsum::MaxPlus;
+
+    // Shape [2, 2, 2] = 8 elements
+    let a = Tensor::<f64, Cpu>::from_data(
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        &[2, 2, 2],
+    );
+    // In col-major, max for i=0 is at some position, max for i=1 is at some position
+
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 1, 2]], &[0]);
+
+    assert_eq!(c.shape(), &[2]);
+
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 2, 2]);
+
+    // Verify only 2 positions have non-zero gradient (one winner per i)
+    let grad_data = grads[0].to_vec();
+    let nonzero_count = grad_data.iter().filter(|&&x| x != 0.0).count();
+    assert_eq!(nonzero_count, 2, "Should have exactly 2 winner positions");
+}
+
+#[cfg(feature = "tropical")]
+#[test]
+fn test_tropical_gradient_accumulation() {
+    // Test that gradients accumulate when multiple outputs map to same winner
+    // This can happen with broadcasting patterns
+    use omeinsum::MaxPlus;
+
+    // Create a tensor where the same position wins multiple times
+    // Shape [2, 2], diagonal extraction: ii->i keeps the diagonal
+    let a = Tensor::<f64, Cpu>::from_data(&[5.0, 1.0, 2.0, 3.0], &[2, 2]);
+    // Diagonal: [5, 3]
+
+    // Now do a tropical identity operation that keeps both dimensions
+    let (c, grad_fn) = einsum_with_grad::<MaxPlus<f64>, _, _>(&[&a], &[&[0, 0]], &[0]);
+
+    // This extracts diagonal with tropical (max) semantics
+    assert_eq!(c.to_vec(), vec![5.0, 3.0]);
+
+    // Different gradients for each output
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[2.0, 3.0], &[2]);
+    let grads = grad_fn.backward::<MaxPlus<f64>>(&grad_out, &[&a]);
+
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    // Position 0 (0,0) gets grad 2, position 3 (1,1) gets grad 3
+    assert_eq!(grads[0].to_vec(), vec![2.0, 0.0, 0.0, 3.0]);
+}

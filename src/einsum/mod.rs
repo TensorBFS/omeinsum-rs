@@ -124,25 +124,26 @@ impl<T: Scalar, B: Backend + Default> EinsumGradient<T, B> {
             self.ixs.len()
         );
 
-        // Handle single input case: use index-exchange trick
-        // Forward: y = einsum(ix -> iy, x)
-        // Backward: grad_x = einsum(iy -> ix, grad_y)
-        //
-        // Note: This only works for standard algebra. Tropical algebras need
-        // argmax routing which requires tracking winners during forward pass.
+        // Handle single input case
         if inputs.len() == 1 {
-            if A::needs_argmax() {
-                unimplemented!(
-                    "Unary backward for tropical algebras not yet implemented. \
-                     Requires argmax tracking during forward pass."
-                );
-            }
-            let grad_x = backward::contract_unary_backward::<A, T, B>(
-                grad_output,
-                &self.ixs[0],
-                &self.iy,
-                &self.size_dict,
-            );
+            let grad_x = if A::needs_argmax() {
+                // Tropical algebras: route gradients through argmax
+                let argmax = self
+                    .argmax_cache
+                    .first()
+                    .expect("Tropical unary backward requires argmax from forward pass");
+                backward::tropical_unary_backward::<T, B>(grad_output, argmax, inputs[0].shape())
+            } else {
+                // Standard algebra: use index-exchange trick
+                // Forward: y = einsum(ix -> iy, x)
+                // Backward: grad_x = einsum(iy -> ix, grad_y)
+                backward::contract_unary_backward::<A, T, B>(
+                    grad_output,
+                    &self.ixs[0],
+                    &self.iy,
+                    &self.size_dict,
+                )
+            };
             return vec![grad_x];
         }
 

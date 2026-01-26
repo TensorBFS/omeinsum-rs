@@ -120,7 +120,19 @@ impl Einsum<usize> {
         );
 
         match &self.optimized {
-            Some(tree) => self.execute_tree::<A, T, B>(tree, tensors),
+            Some(tree) => {
+                // Handle top-level Leaf (single tensor) specially to apply unary transformations
+                if let NestedEinsum::Leaf { tensor_index } = tree {
+                    execute_unary_naive::<A, T, B>(
+                        tensors[*tensor_index],
+                        &self.ixs[*tensor_index],
+                        &self.iy,
+                        &self.size_dict,
+                    )
+                } else {
+                    self.execute_tree::<A, T, B>(tree, tensors)
+                }
+            }
             None => self.execute_pairwise::<A, T, B>(tensors),
         }
     }

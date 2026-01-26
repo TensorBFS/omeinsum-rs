@@ -2,7 +2,7 @@
 
 mod contract;
 
-use super::traits::{Backend, Storage};
+use super::traits::{Backend, BackendScalar, Storage};
 use crate::algebra::{Algebra, Scalar, Standard};
 use std::any::TypeId;
 
@@ -59,6 +59,44 @@ impl Backend for Cpu {
 
     fn from_slice<T: Scalar>(&self, data: &[T]) -> Vec<T> {
         data.to_vec()
+    }
+
+    fn contract<A: Algebra>(
+        &self,
+        _a: &Self::Storage<A::Scalar>,
+        _shape_a: &[usize],
+        _strides_a: &[usize],
+        _modes_a: &[i32],
+        _b: &Self::Storage<A::Scalar>,
+        _shape_b: &[usize],
+        _strides_b: &[usize],
+        _modes_b: &[i32],
+        _shape_c: &[usize],
+        _modes_c: &[i32],
+    ) -> Self::Storage<A::Scalar>
+    where
+        A::Scalar: BackendScalar<Self>,
+    {
+        todo!("Will be implemented in Task 5")
+    }
+
+    fn contract_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        _a: &Self::Storage<A::Scalar>,
+        _shape_a: &[usize],
+        _strides_a: &[usize],
+        _modes_a: &[i32],
+        _b: &Self::Storage<A::Scalar>,
+        _shape_b: &[usize],
+        _strides_b: &[usize],
+        _modes_b: &[i32],
+        _shape_c: &[usize],
+        _modes_c: &[i32],
+    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>)
+    where
+        A::Scalar: BackendScalar<Self>,
+    {
+        todo!("Will be implemented in Task 5")
     }
 
     fn copy_strided<T: Scalar>(

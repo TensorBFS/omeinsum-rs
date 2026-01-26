@@ -51,6 +51,48 @@ where
     execute_unary_naive::<A, T, B>(grad_y, iy, ix, size_dict)
 }
 
+/// Compute gradient for a tropical unary einsum operation.
+///
+/// For tropical algebras, gradients are routed through the argmax:
+/// only the "winning" input positions get the gradient.
+///
+/// # Arguments
+///
+/// * `grad_y` - Gradient of the output tensor
+/// * `argmax` - Argmax tensor from forward pass (stores linear indices into input)
+/// * `input_shape` - Shape of the original input tensor
+///
+/// # Returns
+///
+/// Gradient tensor with the same shape as the original input.
+pub fn tropical_unary_backward<T, B>(
+    grad_y: &Tensor<T, B>,
+    argmax: &Tensor<u32, B>,
+    input_shape: &[usize],
+) -> Tensor<T, B>
+where
+    T: Scalar,
+    B: Backend + Default,
+{
+    // Create zero tensor with input shape (Scalar requires Default which gives 0 for numerics)
+    let input_size: usize = input_shape.iter().product();
+    let mut grad_data = vec![T::default(); input_size];
+
+    // Scatter gradients to winner positions
+    let grad_y_data = grad_y.to_vec();
+    let argmax_data = argmax.to_vec();
+
+    for (out_idx, &winner_pos) in argmax_data.iter().enumerate() {
+        let grad_val = grad_y_data[out_idx];
+        // For tropical, each output maps to exactly one winner, but multiple
+        // outputs can share the same winner (e.g., in broadcasting).
+        // We need AddAssign which Scalar provides.
+        grad_data[winner_pos as usize] += grad_val;
+    }
+
+    Tensor::from_data(&grad_data, input_shape)
+}
+
 /// Compute gradients for a binary contraction.
 ///
 /// Given the gradient of the output (grad_c), compute gradients for both inputs (a, b).

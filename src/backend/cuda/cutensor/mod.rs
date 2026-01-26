@@ -16,6 +16,8 @@ pub enum CutensorError {
     AllocFailed,
     /// Invalid parameter value.
     InvalidValue,
+    /// Architecture mismatch (GPU compute capability not supported).
+    ArchMismatch,
     /// Operation not supported.
     NotSupported,
     /// Other error with status code.
@@ -28,6 +30,7 @@ impl std::fmt::Display for CutensorError {
             CutensorError::NotInitialized => write!(f, "cuTENSOR not initialized"),
             CutensorError::AllocFailed => write!(f, "cuTENSOR allocation failed"),
             CutensorError::InvalidValue => write!(f, "cuTENSOR invalid value"),
+            CutensorError::ArchMismatch => write!(f, "cuTENSOR architecture mismatch"),
             CutensorError::NotSupported => write!(f, "cuTENSOR operation not supported"),
             CutensorError::Other(code) => write!(f, "cuTENSOR error (code {})", code),
         }
@@ -50,6 +53,7 @@ pub fn check(status: cutensorStatus_t) -> Result<(), CutensorError> {
         cutensorStatus_t::NOT_INITIALIZED => Err(CutensorError::NotInitialized),
         cutensorStatus_t::ALLOC_FAILED => Err(CutensorError::AllocFailed),
         cutensorStatus_t::INVALID_VALUE => Err(CutensorError::InvalidValue),
+        cutensorStatus_t::ARCH_MISMATCH => Err(CutensorError::ArchMismatch),
         cutensorStatus_t::NOT_SUPPORTED => Err(CutensorError::NotSupported),
         other => Err(CutensorError::Other(other as i32)),
     }

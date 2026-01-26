@@ -59,7 +59,7 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
 
     /// Create a tensor from data with the given shape.
     ///
-    /// Data is assumed to be in row-major (C) order.
+    /// Data is assumed to be in column-major (Fortran) order.
     pub fn from_data(data: &[T], shape: &[usize]) -> Self
     where
         B: Default,
@@ -406,7 +406,6 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         }
 
         let data = self.to_vec();
-        let input_strides = compute_contiguous_strides(&self.shape);
         let output_strides = compute_contiguous_strides(&new_shape);
         let _axis_size = self.shape[axis];
 
@@ -416,12 +415,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
 
         // Iterate over all elements in the input
         for (flat_idx, &val) in data.iter().enumerate() {
-            // Convert flat index to multi-dimensional coordinates
+            // Convert flat index to multi-dimensional coordinates (column-major)
             let mut coords: Vec<usize> = vec![0; self.ndim()];
             let mut remaining = flat_idx;
             for dim in 0..self.ndim() {
-                coords[dim] = remaining / input_strides[dim];
-                remaining %= input_strides[dim];
+                coords[dim] = remaining % self.shape[dim];
+                remaining /= self.shape[dim];
             }
 
             // Build output coordinates by removing the summed axis
@@ -432,7 +431,7 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
                 .map(|(_, &c)| c)
                 .collect();
 
-            // Convert output coordinates to flat index
+            // Convert output coordinates to flat index (column-major)
             let mut out_flat_idx = 0;
             for (i, &coord) in out_coords.iter().enumerate() {
                 out_flat_idx += coord * output_strides[i];
@@ -480,14 +479,17 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
 }
 
 /// Compute strides for row-major (C) contiguous layout.
+/// Compute contiguous strides for column-major (Fortran) layout.
+///
+/// For shape [m, n], returns strides [1, m] (first dimension is contiguous).
 pub fn compute_contiguous_strides(shape: &[usize]) -> Vec<usize> {
     if shape.is_empty() {
         return vec![];
     }
 
     let mut strides = vec![1; shape.len()];
-    for i in (0..shape.len().saturating_sub(1)).rev() {
-        strides[i] = strides[i + 1] * shape[i + 1];
+    for i in 1..shape.len() {
+        strides[i] = strides[i - 1] * shape[i - 1];
     }
     strides
 }
@@ -511,26 +513,37 @@ mod tests {
 
     #[test]
     fn test_tensor_creation() {
+        // Column-major: data [1,2,3,4,5,6] for shape [2,3] represents:
+        // [[1, 3, 5],
+        //  [2, 4, 6]]
+        // Strides for column-major [2, 3] are [1, 2]
         let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         assert_eq!(t.shape(), &[2, 3]);
-        assert_eq!(t.strides(), &[3, 1]);
+        assert_eq!(t.strides(), &[1, 2]); // Column-major strides
         assert!(t.is_contiguous());
         assert_eq!(t.numel(), 6);
     }
 
     #[test]
     fn test_permute() {
+        // Column-major: data [1,2,3,4,5,6] for shape [2,3] represents:
+        // [[1, 3, 5],
+        //  [2, 4, 6]]
         let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         let p = t.permute(&[1, 0]);
 
         assert_eq!(p.shape(), &[3, 2]);
-        assert_eq!(p.strides(), &[1, 3]);
+        assert_eq!(p.strides(), &[2, 1]); // Permuted strides
         assert!(!p.is_contiguous());
 
         // After making contiguous, data should be transposed
+        // Transposed matrix in column-major:
+        // [[1, 2],
+        //  [3, 4],
+        //  [5, 6]] -> column-major data: [1, 3, 5, 2, 4, 6]
         let c = p.contiguous();
         assert!(c.is_contiguous());
-        assert_eq!(c.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        assert_eq!(c.to_vec(), vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     }
 
     #[test]
@@ -545,14 +558,15 @@ mod tests {
 
     #[test]
     fn test_permute_then_reshape() {
+        // Column-major: data [1,2,3,4,5,6] for shape [2,3]
         let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         let p = t.permute(&[1, 0]); // [3, 2], non-contiguous
         let r = p.reshape(&[6]); // Must make contiguous first
 
         assert_eq!(r.shape(), &[6]);
         assert!(r.is_contiguous());
-        // Transposed data flattened: [[1,4],[2,5],[3,6]] -> [1,4,2,5,3,6]
-        assert_eq!(r.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        // Transposed and flattened in column-major: [1, 3, 5, 2, 4, 6]
+        assert_eq!(r.to_vec(), vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     }
 
     #[test]
@@ -568,18 +582,20 @@ mod tests {
     fn test_sum_axis() {
         use crate::algebra::Standard;
 
-        // Matrix: [[1, 2], [3, 4]]
+        // Column-major: data [1, 2, 3, 4] for shape [2, 2] represents:
+        // [[1, 3],
+        //  [2, 4]]
         let t = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-        // Sum over axis 1 (columns): [1+2, 3+4] = [3, 7]
+        // Sum over axis 1 (columns): [1+3, 2+4] = [4, 6]
         let sum_cols = t.sum_axis::<Standard<f32>>(1);
         assert_eq!(sum_cols.shape(), &[2]);
-        assert_eq!(sum_cols.to_vec(), vec![3.0, 7.0]);
+        assert_eq!(sum_cols.to_vec(), vec![4.0, 6.0]);
 
-        // Sum over axis 0 (rows): [1+3, 2+4] = [4, 6]
+        // Sum over axis 0 (rows): [1+2, 3+4] = [3, 7]
         let sum_rows = t.sum_axis::<Standard<f32>>(0);
         assert_eq!(sum_rows.shape(), &[2]);
-        assert_eq!(sum_rows.to_vec(), vec![4.0, 6.0]);
+        assert_eq!(sum_rows.to_vec(), vec![3.0, 7.0]);
     }
 
     #[test]

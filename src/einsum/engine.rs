@@ -507,15 +507,17 @@ mod tests {
     #[test]
     fn test_einsum_sum_axis() {
         // Reduction: A[i,j] -> B[i] (sum over j)
-        // Matrix: [[1, 2], [3, 4]]
+        // Column-major: data [1,2,3,4] for shape [2,2] represents:
+        // [[1, 3],
+        //  [2, 4]]
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
         let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
         let ein = Einsum::new(vec![vec![0, 1]], vec![0], sizes);
 
         let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a]);
-        // sum over j: [1+2, 3+4] = [3, 7]
-        assert_eq!(result.to_vec(), vec![3.0, 7.0]);
+        // sum over j: [1+3, 2+4] = [4, 6]
+        assert_eq!(result.to_vec(), vec![4.0, 6.0]);
     }
 
     #[test]

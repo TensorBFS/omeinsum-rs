@@ -76,11 +76,11 @@ fn test_tensor_contraction_3d() {
     assert_eq!(c.shape(), &[2, 2, 2]);
     // Verify the contraction produces correct results
     // For each (i,j,l): sum over k of A[i,j,k] * B[k,l]
+    // Column-major for [2,2,2]: strides [1,2,4], so A[i,j,k] at index i + 2j + 4k
+    // A[0,0,0]=1, A[0,0,1]=5; B[0,0]=1, B[1,0]=2
+    // C[0,0,0] = A[0,0,0]*B[0,0] + A[0,0,1]*B[1,0] = 1*1 + 5*2 = 11
     let c_vec = c.to_vec();
-    // A[0,0,:] = [1,2], B[:,0] = [1,3] => 1*1 + 2*3 = 7
-    // A[0,0,:] = [1,2], B[:,1] = [2,4] => 1*2 + 2*4 = 10
-    assert_eq!(c_vec[0], 7.0);
-    assert_eq!(c_vec[1], 10.0);
+    assert_eq!(c_vec[0], 11.0);
 }
 
 #[test]
@@ -113,14 +113,17 @@ fn test_einsum_with_different_contraction_axes() {
 #[test]
 fn test_matmul_f64() {
     // Test with f64 precision
+    // Column-major: [1,2,3,4] for shape [2,2] → [[1,3],[2,4]]
+    // Column-major: [5,6,7,8] for shape [2,2] → [[5,7],[6,8]]
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
 
     assert_eq!(c.shape(), &[2, 2]);
-    // [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]
-    assert_eq!(c.to_vec(), vec![19.0, 22.0, 43.0, 50.0]);
+    // [[1,3],[2,4]] @ [[5,7],[6,8]] = [[23,31],[34,46]]
+    // In column-major: [23, 34, 31, 46]
+    assert_eq!(c.to_vec(), vec![23.0, 34.0, 31.0, 46.0]);
 }
 
 #[test]

@@ -1,7 +1,8 @@
 //! CPU backend implementation.
 
 use super::traits::{Backend, Storage};
-use crate::algebra::{Algebra, Scalar};
+use crate::algebra::{Algebra, Scalar, Standard};
+use std::any::TypeId;
 
 /// CPU backend using Vec storage.
 #[derive(Clone, Debug, Default)]
@@ -81,8 +82,8 @@ impl Backend for Cpu {
 
             *dst_elem = src[src_offset];
 
-            // Increment indices (row-major order)
-            for dim in (0..shape.len()).rev() {
+            // Increment indices (column-major order: first dimension first)
+            for dim in 0..shape.len() {
                 indices[dim] += 1;
                 if indices[dim] < shape[dim] {
                     break;
@@ -102,6 +103,21 @@ impl Backend for Cpu {
         b: &Vec<A::Scalar>,
         n: usize,
     ) -> Vec<A::Scalar> {
+        // Fast path: faer for Standard f32/f64
+        if TypeId::of::<A>() == TypeId::of::<Standard<f32>>() {
+            // SAFETY: A::Scalar is f32 when A is Standard<f32>
+            let a_f32: &[f32] = unsafe { std::mem::transmute(a.as_slice()) };
+            let b_f32: &[f32] = unsafe { std::mem::transmute(b.as_slice()) };
+            let result = faer_gemm_f32(a_f32, m, k, b_f32, n);
+            return unsafe { std::mem::transmute(result) };
+        }
+        if TypeId::of::<A>() == TypeId::of::<Standard<f64>>() {
+            let a_f64: &[f64] = unsafe { std::mem::transmute(a.as_slice()) };
+            let b_f64: &[f64] = unsafe { std::mem::transmute(b.as_slice()) };
+            let result = faer_gemm_f64(a_f64, m, k, b_f64, n);
+            return unsafe { std::mem::transmute(result) };
+        }
+
         // Try to use optimized tropical-gemm if available
         #[cfg(feature = "tropical-kernels")]
         {
@@ -147,12 +163,13 @@ impl Backend for Cpu {
 
         // For tropical: grad_a[i, argmax[i,j]] += grad_c[i,j]
         // For standard: grad_a = grad_c @ b.T
+        // Column-major: element (i, j) is at index j * nrows + i
         if A::needs_argmax() {
-            for i in 0..m {
-                for j in 0..n {
-                    let idx = argmax[i * n + j] as usize;
-                    // Accumulate gradient using AddAssign
-                    grad_a[i * k + idx] += grad_c[i * n + j];
+            for j in 0..n {
+                for i in 0..m {
+                    let idx = argmax[j * m + i] as usize; // argmax[i, j] in column-major
+                    // grad_a[i, idx] += grad_c[i, j]
+                    grad_a[idx * m + i] += grad_c[j * m + i];
                 }
             }
         }
@@ -171,12 +188,13 @@ impl Backend for Cpu {
     ) -> Vec<A::Scalar> {
         let mut grad_b = vec![A::Scalar::default(); k * n];
 
+        // Column-major: element (i, j) is at index j * nrows + i
         if A::needs_argmax() {
-            for i in 0..m {
-                for j in 0..n {
-                    let idx = argmax[i * n + j] as usize;
-                    // Accumulate gradient using AddAssign
-                    grad_b[idx * n + j] += grad_c[i * n + j];
+            for j in 0..n {
+                for i in 0..m {
+                    let idx = argmax[j * m + i] as usize; // argmax[i, j] in column-major
+                    // grad_b[idx, j] += grad_c[i, j]
+                    grad_b[j * k + idx] += grad_c[j * m + i];
                 }
             }
         }
@@ -247,27 +265,70 @@ impl Backend for Cpu {
     }
 }
 
-/// Generic GEMM using semiring operations.
+/// GEMM using faer for f32 (column-major layout).
+///
+/// Computes C = A @ B where A is m×k, B is k×n, C is m×n.
+fn faer_gemm_f32(a: &[f32], m: usize, k: usize, b: &[f32], n: usize) -> Vec<f32> {
+    use faer::Mat;
+
+    // Create matrices from column-major data
+    // Column-major: element (i, j) is at index j * nrows + i
+    let a_mat = Mat::from_fn(m, k, |i, j| a[j * m + i]);
+    let b_mat = Mat::from_fn(k, n, |i, j| b[j * k + i]);
+
+    // Multiply
+    let c_mat = &a_mat * &b_mat;
+
+    // Convert back to column-major Vec
+    let mut c = vec![0.0f32; m * n];
+    for j in 0..n {
+        for i in 0..m {
+            c[j * m + i] = c_mat[(i, j)];
+        }
+    }
+    c
+}
+
+/// GEMM using faer for f64 (column-major layout).
+fn faer_gemm_f64(a: &[f64], m: usize, k: usize, b: &[f64], n: usize) -> Vec<f64> {
+    use faer::Mat;
+
+    let a_mat = Mat::from_fn(m, k, |i, j| a[j * m + i]);
+    let b_mat = Mat::from_fn(k, n, |i, j| b[j * k + i]);
+
+    let c_mat = &a_mat * &b_mat;
+
+    let mut c = vec![0.0f64; m * n];
+    for j in 0..n {
+        for i in 0..m {
+            c[j * m + i] = c_mat[(i, j)];
+        }
+    }
+    c
+}
+
+/// Generic GEMM using semiring operations (column-major layout).
 fn generic_gemm<A: Algebra>(a: &[A::Scalar], m: usize, k: usize, b: &[A::Scalar], n: usize) -> Vec<A::Scalar> {
     let mut c = vec![A::zero().to_scalar(); m * n];
 
-    for i in 0..m {
-        for j in 0..n {
+    // Column-major: element (i, j) is at index j * nrows + i
+    for j in 0..n {
+        for i in 0..m {
             let mut acc = A::zero();
             for kk in 0..k {
-                let a_val = A::from_scalar(a[i * k + kk]);
-                let b_val = A::from_scalar(b[kk * n + j]);
+                let a_val = A::from_scalar(a[kk * m + i]); // A[i, kk] in column-major
+                let b_val = A::from_scalar(b[j * k + kk]); // B[kk, j] in column-major
                 let prod = a_val.mul(b_val);
                 acc = acc.add(prod);
             }
-            c[i * n + j] = acc.to_scalar();
+            c[j * m + i] = acc.to_scalar();
         }
     }
 
     c
 }
 
-/// Generic GEMM with argmax tracking.
+/// Generic GEMM with argmax tracking (column-major layout).
 fn generic_gemm_with_argmax<A: Algebra<Index = u32>>(
     a: &[A::Scalar],
     m: usize,
@@ -278,22 +339,23 @@ fn generic_gemm_with_argmax<A: Algebra<Index = u32>>(
     let mut c = vec![A::zero().to_scalar(); m * n];
     let mut argmax = vec![0u32; m * n];
 
-    for i in 0..m {
-        for j in 0..n {
+    // Column-major: element (i, j) is at index j * nrows + i
+    for j in 0..n {
+        for i in 0..m {
             let mut acc = A::zero();
             let mut best_k = 0u32;
 
             for kk in 0..k {
-                let a_val = A::from_scalar(a[i * k + kk]);
-                let b_val = A::from_scalar(b[kk * n + j]);
+                let a_val = A::from_scalar(a[kk * m + i]); // A[i, kk] in column-major
+                let b_val = A::from_scalar(b[j * k + kk]); // B[kk, j] in column-major
                 let prod = a_val.mul(b_val);
                 let (new_acc, winner) = acc.add_with_argmax(best_k, prod, kk as u32);
                 acc = new_acc;
                 best_k = winner;
             }
 
-            c[i * n + j] = acc.to_scalar();
-            argmax[i * n + j] = best_k;
+            c[j * m + i] = acc.to_scalar();
+            argmax[j * m + i] = best_k;
         }
     }
 
@@ -402,12 +464,14 @@ fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
 
         let result = tropical_matmul_with_argmax::<TropicalMaxPlus<f32>>(a_f32, m, k, b_f32, n);
 
+        // Convert to column-major storage
+        // Note: tropical-gemm's accessor functions use (col, row) order internally
         let mut scalars = Vec::with_capacity(m * n);
         let mut argmax = Vec::with_capacity(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                scalars.push(result.get(i, j).value());
-                argmax.push(result.get_argmax(i, j));
+        for j in 0..n {
+            for i in 0..m {
+                scalars.push(result.get(j, i).value());
+                argmax.push(result.get_argmax(j, i));
             }
         }
 
@@ -418,12 +482,13 @@ fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
 
         let result = tropical_matmul_with_argmax::<TropicalMaxPlus<f64>>(a_f64, m, k, b_f64, n);
 
+        // Convert to column-major storage
         let mut scalars = Vec::with_capacity(m * n);
         let mut argmax = Vec::with_capacity(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                scalars.push(result.get(i, j).value());
-                argmax.push(result.get_argmax(i, j));
+        for j in 0..n {
+            for i in 0..m {
+                scalars.push(result.get(j, i).value());
+                argmax.push(result.get_argmax(j, i));
             }
         }
 
@@ -434,12 +499,13 @@ fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
 
         let result = tropical_matmul_with_argmax::<TropicalMinPlus<f32>>(a_f32, m, k, b_f32, n);
 
+        // Convert to column-major storage
         let mut scalars = Vec::with_capacity(m * n);
         let mut argmax = Vec::with_capacity(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                scalars.push(result.get(i, j).value());
-                argmax.push(result.get_argmax(i, j));
+        for j in 0..n {
+            for i in 0..m {
+                scalars.push(result.get(j, i).value());
+                argmax.push(result.get_argmax(j, i));
             }
         }
 
@@ -450,12 +516,13 @@ fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
 
         let result = tropical_matmul_with_argmax::<TropicalMinPlus<f64>>(a_f64, m, k, b_f64, n);
 
+        // Convert to column-major storage
         let mut scalars = Vec::with_capacity(m * n);
         let mut argmax = Vec::with_capacity(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                scalars.push(result.get(i, j).value());
-                argmax.push(result.get_argmax(i, j));
+        for j in 0..n {
+            for i in 0..m {
+                scalars.push(result.get(j, i).value());
+                argmax.push(result.get_argmax(j, i));
             }
         }
 
@@ -466,12 +533,13 @@ fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
 
         let result = tropical_matmul_with_argmax::<TropicalMaxMul<f32>>(a_f32, m, k, b_f32, n);
 
+        // Convert to column-major storage
         let mut scalars = Vec::with_capacity(m * n);
         let mut argmax = Vec::with_capacity(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                scalars.push(result.get(i, j).value());
-                argmax.push(result.get_argmax(i, j));
+        for j in 0..n {
+            for i in 0..m {
+                scalars.push(result.get(j, i).value());
+                argmax.push(result.get_argmax(j, i));
             }
         }
 
@@ -482,12 +550,13 @@ fn try_tropical_gemm_with_argmax<A: Algebra<Index = u32>>(
 
         let result = tropical_matmul_with_argmax::<TropicalMaxMul<f64>>(a_f64, m, k, b_f64, n);
 
+        // Convert to column-major storage
         let mut scalars = Vec::with_capacity(m * n);
         let mut argmax = Vec::with_capacity(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                scalars.push(result.get(i, j).value());
-                argmax.push(result.get_argmax(i, j));
+        for j in 0..n {
+            for i in 0..m {
+                scalars.push(result.get(j, i).value());
+                argmax.push(result.get_argmax(j, i));
             }
         }
 
@@ -553,14 +622,20 @@ mod tests {
     #[test]
     fn test_copy_strided() {
         let cpu = Cpu;
-        let src = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // 2x3 row-major
+        // Column-major: data [1,2,3,4,5,6] for shape [2,3] represents:
+        // [[1, 3, 5],
+        //  [2, 4, 6]]
+        let src = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
 
-        // Transpose: shape [3, 2], strides [1, 3]
-        let dst = cpu.copy_strided(&src, &[3, 2], &[1, 3], 0);
+        // Transpose: shape [3, 2], strides [2, 1] (original col-major strides permuted)
+        // This reads the original matrix as transposed
+        let dst = cpu.copy_strided(&src, &[3, 2], &[2, 1], 0);
 
-        // Original: [[1, 2, 3], [4, 5, 6]]
-        // Transposed: [[1, 4], [2, 5], [3, 6]]
-        assert_eq!(dst, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        // Transposed matrix in column-major:
+        // [[1, 2],
+        //  [3, 4],
+        //  [5, 6]] -> column-major data: [1, 3, 5, 2, 4, 6]
+        assert_eq!(dst, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     }
 
     /// Test that optimized tropical-gemm kernels produce same results as generic implementation.

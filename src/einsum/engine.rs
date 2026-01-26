@@ -164,12 +164,23 @@ impl Einsum<usize> {
             Some(tree) => {
                 // Handle top-level Leaf (single tensor) specially to apply unary transformations
                 if let NestedEinsum::Leaf { tensor_index } = tree {
-                    execute_unary_naive::<A, T, B>(
-                        tensors[*tensor_index],
-                        &self.ixs[*tensor_index],
-                        &self.iy,
-                        &self.size_dict,
-                    )
+                    if A::needs_argmax() {
+                        let (result, argmax) = execute_unary_with_argmax::<A, T, B>(
+                            tensors[*tensor_index],
+                            &self.ixs[*tensor_index],
+                            &self.iy,
+                            &self.size_dict,
+                        );
+                        argmax_cache.push(argmax);
+                        result
+                    } else {
+                        execute_unary_naive::<A, T, B>(
+                            tensors[*tensor_index],
+                            &self.ixs[*tensor_index],
+                            &self.iy,
+                            &self.size_dict,
+                        )
+                    }
                 } else {
                     self.execute_tree_with_argmax::<A, T, B>(tree, tensors, &mut argmax_cache)
                 }
@@ -235,12 +246,23 @@ impl Einsum<usize> {
         }
 
         if tensors.len() == 1 {
-            return execute_unary_naive::<A, T, B>(
-                tensors[0],
-                &self.ixs[0],
-                &self.iy,
-                &self.size_dict,
-            );
+            if A::needs_argmax() {
+                let (result, argmax) = execute_unary_with_argmax::<A, T, B>(
+                    tensors[0],
+                    &self.ixs[0],
+                    &self.iy,
+                    &self.size_dict,
+                );
+                argmax_cache.push(argmax);
+                return result;
+            } else {
+                return execute_unary_naive::<A, T, B>(
+                    tensors[0],
+                    &self.ixs[0],
+                    &self.iy,
+                    &self.size_dict,
+                );
+            }
         }
 
         // Contract left to right
@@ -543,6 +565,109 @@ where
     } else {
         Tensor::from_data(&out_data, &out_shape)
     }
+}
+
+/// Execute unary einsum with argmax tracking for tropical algebras.
+///
+/// Returns both the result tensor and an argmax tensor that tracks which
+/// inner index position "won" for each output element.
+///
+/// The argmax tensor has the same shape as the output. Each element stores
+/// the linear index into the input tensor that contributed to that output.
+pub(crate) fn execute_unary_with_argmax<A, T, B>(
+    tensor: &Tensor<T, B>,
+    ix: &[usize],
+    iy: &[usize],
+    size_dict: &HashMap<usize, usize>,
+) -> (Tensor<T, B>, Tensor<u32, B>)
+where
+    A: Algebra<Scalar = T, Index = u32>,
+    T: Scalar,
+    B: Backend + Default,
+{
+    // 1. Classify indices (same as execute_unary_naive)
+    let outer: &[usize] = iy;
+    let outer_set: HashSet<usize> = outer.iter().copied().collect();
+    let mut inner_vec: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for i in ix.iter().copied().filter(|i| !outer_set.contains(i)) {
+        if seen.insert(i) {
+            inner_vec.push(i);
+        }
+    }
+
+    // 2. Build output shape
+    let out_shape: Vec<usize> = outer.iter().map(|&idx| size_dict[&idx]).collect();
+    let out_size = out_shape.iter().product::<usize>().max(1);
+
+    // 3. Build inner ranges
+    let inner_ranges: Vec<usize> = inner_vec.iter().map(|&idx| size_dict[&idx]).collect();
+    let inner_size = inner_ranges.iter().product::<usize>().max(1);
+
+    // 4. Allocate output and argmax
+    let mut out_data = vec![A::zero().to_scalar(); out_size];
+    let mut argmax_data = vec![0u32; out_size];
+
+    // 5. Loop over output positions
+    for out_linear in 0..out_size {
+        let out_multi = linear_to_multi(out_linear, &out_shape);
+
+        // Map: outer index label -> value
+        let mut idx_values: HashMap<usize, usize> = HashMap::new();
+        let mut skip_position = false;
+
+        for (&idx, &val) in outer.iter().zip(out_multi.iter()) {
+            if let Some(&existing) = idx_values.get(&idx) {
+                if existing != val {
+                    skip_position = true;
+                    break;
+                }
+            } else {
+                idx_values.insert(idx, val);
+            }
+        }
+
+        if skip_position {
+            continue;
+        }
+
+        // 6. Find max over inner indices (tropical-style)
+        let mut best_val = A::zero();
+        let mut best_in_pos = 0usize;
+
+        for inner_linear in 0..inner_size {
+            let inner_multi = linear_to_multi(inner_linear, &inner_ranges);
+            for (&idx, &val) in inner_vec.iter().zip(inner_multi.iter()) {
+                idx_values.insert(idx, val);
+            }
+
+            let in_pos = compute_input_position(ix, &idx_values, tensor.shape());
+            let val = A::from_scalar(tensor.get(in_pos));
+
+            // For first iteration or if this value is better
+            if inner_linear == 0 || A::is_better(&val, &best_val) {
+                best_val = val;
+                best_in_pos = in_pos;
+            }
+        }
+
+        out_data[out_linear] = best_val.to_scalar();
+        argmax_data[out_linear] = best_in_pos as u32;
+    }
+
+    let result = if out_shape.is_empty() {
+        Tensor::from_data(&out_data, &[])
+    } else {
+        Tensor::from_data(&out_data, &out_shape)
+    };
+
+    let argmax = if out_shape.is_empty() {
+        Tensor::from_data(&argmax_data, &[])
+    } else {
+        Tensor::from_data(&argmax_data, &out_shape)
+    };
+
+    (result, argmax)
 }
 
 #[cfg(test)]

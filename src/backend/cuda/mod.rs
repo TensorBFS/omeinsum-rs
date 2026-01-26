@@ -2,6 +2,7 @@
 //!
 //! This module provides the CUDA backend implementation using cudarc.
 
+mod cutensor;
 mod storage;
 pub use storage::CudaStorage;
 

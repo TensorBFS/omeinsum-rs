@@ -532,10 +532,34 @@ impl Backend for Cuda {
             ).expect("cuTENSOR contraction failed");
 
             unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<A::Scalar>() == TypeId::of::<CudaComplex<f32>>() {
+            // SAFETY: We've verified the type is CudaComplex<f32>
+            let a_c32: &CudaStorage<CudaComplex<f32>> = unsafe { std::mem::transmute(a) };
+            let b_c32: &CudaStorage<CudaComplex<f32>> = unsafe { std::mem::transmute(b) };
+
+            let result = self.contract_cutensor(
+                a_c32, shape_a, strides_a, modes_a,
+                b_c32, shape_b, strides_b, modes_b,
+                shape_c, &strides_c, modes_c,
+            ).expect("cuTENSOR contraction failed");
+
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<A::Scalar>() == TypeId::of::<CudaComplex<f64>>() {
+            // SAFETY: We've verified the type is CudaComplex<f64>
+            let a_c64: &CudaStorage<CudaComplex<f64>> = unsafe { std::mem::transmute(a) };
+            let b_c64: &CudaStorage<CudaComplex<f64>> = unsafe { std::mem::transmute(b) };
+
+            let result = self.contract_cutensor(
+                a_c64, shape_a, strides_a, modes_a,
+                b_c64, shape_b, strides_b, modes_b,
+                shape_c, &strides_c, modes_c,
+            ).expect("cuTENSOR contraction failed");
+
+            unsafe { std::mem::transmute(result) }
         } else {
             panic!(
-                "CUDA backend only supports f32 and f64 for contractions. \
-                 Got type: {:?}",
+                "CUDA backend only supports f32, f64, CudaComplex<f32>, and \
+                 CudaComplex<f64> for contractions. Got type: {:?}",
                 std::any::type_name::<A::Scalar>()
             );
         }

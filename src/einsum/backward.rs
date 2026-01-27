@@ -14,7 +14,7 @@
 //! This elegantly handles trace, sum, diagonal, transpose, and their gradients.
 
 use crate::algebra::{Algebra, Scalar};
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendScalar};
 use crate::tensor::Tensor;
 use std::collections::HashMap;
 
@@ -79,7 +79,7 @@ pub fn contract_binary_backward<A, T, B>(
 ) -> (Tensor<T, B>, Tensor<T, B>)
 where
     A: Algebra<Scalar = T, Index = u32>,
-    T: Scalar,
+    T: Scalar + BackendScalar<B>,
     B: Backend,
 {
     if A::needs_argmax() {
@@ -107,7 +107,7 @@ fn standard_backward<A, T, B>(
 ) -> (Tensor<T, B>, Tensor<T, B>)
 where
     A: Algebra<Scalar = T, Index = u32>,
-    T: Scalar,
+    T: Scalar + BackendScalar<B>,
     B: Backend,
 {
     // For C[iy] = A[ia] @ B[ib] (contraction over shared indices in ia and ib not in iy):

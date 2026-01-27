@@ -11,7 +11,7 @@ pub use builder::EinBuilder;
 pub use engine::Einsum;
 
 use crate::algebra::{Algebra, Scalar};
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendScalar};
 use crate::tensor::Tensor;
 
 /// One-shot einsum with automatic optimization.
@@ -38,7 +38,7 @@ use crate::tensor::Tensor;
 pub fn einsum<A, T, B>(tensors: &[&Tensor<T, B>], ixs: &[&[usize]], iy: &[usize]) -> Tensor<T, B>
 where
     A: Algebra<Scalar = T, Index = u32>,
-    T: Scalar,
+    T: Scalar + BackendScalar<B>,
     B: Backend + Default,
 {
     let size_dict = infer_size_dict(tensors, ixs);
@@ -63,7 +63,7 @@ pub fn einsum_with_grad<A, T, B>(
 ) -> (Tensor<T, B>, EinsumGradient<T, B>)
 where
     A: Algebra<Scalar = T, Index = u32>,
-    T: Scalar,
+    T: Scalar + BackendScalar<B>,
     B: Backend + Default,
 {
     let size_dict = infer_size_dict(tensors, ixs);
@@ -100,7 +100,7 @@ pub struct EinsumGradient<T: Scalar, B: Backend> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Scalar, B: Backend + Default> EinsumGradient<T, B> {
+impl<T: Scalar + BackendScalar<B>, B: Backend + Default> EinsumGradient<T, B> {
     /// Compute gradients for all inputs given the output gradient.
     ///
     /// # Arguments

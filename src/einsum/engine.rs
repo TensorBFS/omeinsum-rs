@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use omeco::{optimize_code, EinCode, GreedyMethod, Label, NestedEinsum, TreeSA};
 
 use crate::algebra::{Algebra, Scalar};
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendScalar};
 use crate::tensor::Tensor;
 
 /// Einsum specification and execution engine.
@@ -112,7 +112,7 @@ impl Einsum<usize> {
     pub fn execute<A, T, B>(&self, tensors: &[&Tensor<T, B>]) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         assert_eq!(
@@ -151,7 +151,7 @@ impl Einsum<usize> {
     ) -> (Tensor<T, B>, Vec<Tensor<u32, B>>)
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         assert_eq!(
@@ -194,7 +194,7 @@ impl Einsum<usize> {
     ) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         match tree {
@@ -231,7 +231,7 @@ impl Einsum<usize> {
     ) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         if tensors.is_empty() {
@@ -293,7 +293,7 @@ impl Einsum<usize> {
     ) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         match tree {
@@ -317,7 +317,7 @@ impl Einsum<usize> {
     fn execute_pairwise<A, T, B>(&self, tensors: &[&Tensor<T, B>]) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         if tensors.is_empty() {

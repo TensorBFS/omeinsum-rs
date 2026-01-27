@@ -35,6 +35,29 @@ impl Cpu {
     ) -> Vec<A::Scalar> {
         self.gemm_batched::<A>(&a.to_vec(), batch_size, m, k, &b.to_vec(), n)
     }
+
+    pub(crate) fn gemm_with_argmax_internal<A: Algebra<Index = u32>>(
+        &self,
+        a: &[A::Scalar],
+        m: usize,
+        k: usize,
+        b: &[A::Scalar],
+        n: usize,
+    ) -> (Vec<A::Scalar>, Vec<u32>) {
+        self.gemm_with_argmax::<A>(&a.to_vec(), m, k, &b.to_vec(), n)
+    }
+
+    pub(crate) fn gemm_batched_with_argmax_internal<A: Algebra<Index = u32>>(
+        &self,
+        a: &[A::Scalar],
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        b: &[A::Scalar],
+        n: usize,
+    ) -> (Vec<A::Scalar>, Vec<u32>) {
+        self.gemm_batched_with_argmax::<A>(&a.to_vec(), batch_size, m, k, &b.to_vec(), n)
+    }
 }
 
 impl<T: Scalar> Storage<T> for Vec<T> {
@@ -90,40 +113,48 @@ impl Backend for Cpu {
 
     fn contract<A: Algebra>(
         &self,
-        _a: &Self::Storage<A::Scalar>,
-        _shape_a: &[usize],
-        _strides_a: &[usize],
-        _modes_a: &[i32],
-        _b: &Self::Storage<A::Scalar>,
-        _shape_b: &[usize],
-        _strides_b: &[usize],
-        _modes_b: &[i32],
-        _shape_c: &[usize],
-        _modes_c: &[i32],
+        a: &Self::Storage<A::Scalar>,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
+        b: &Self::Storage<A::Scalar>,
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
     ) -> Self::Storage<A::Scalar>
     where
         A::Scalar: BackendScalar<Self>,
     {
-        todo!("Will be implemented in Task 5")
+        contract::contract::<A>(
+            self, a, shape_a, strides_a, modes_a,
+            b, shape_b, strides_b, modes_b,
+            shape_c, modes_c,
+        )
     }
 
     fn contract_with_argmax<A: Algebra<Index = u32>>(
         &self,
-        _a: &Self::Storage<A::Scalar>,
-        _shape_a: &[usize],
-        _strides_a: &[usize],
-        _modes_a: &[i32],
-        _b: &Self::Storage<A::Scalar>,
-        _shape_b: &[usize],
-        _strides_b: &[usize],
-        _modes_b: &[i32],
-        _shape_c: &[usize],
-        _modes_c: &[i32],
+        a: &Self::Storage<A::Scalar>,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
+        b: &Self::Storage<A::Scalar>,
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
     ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>)
     where
         A::Scalar: BackendScalar<Self>,
     {
-        todo!("Will be implemented in Task 5")
+        contract::contract_with_argmax::<A>(
+            self, a, shape_a, strides_a, modes_a,
+            b, shape_b, strides_b, modes_b,
+            shape_c, modes_c,
+        )
     }
 
     fn copy_strided<T: Scalar>(

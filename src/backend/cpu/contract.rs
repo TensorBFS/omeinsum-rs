@@ -231,6 +231,75 @@ fn permute_data<T: Copy + Default>(
     result
 }
 
+/// Execute tensor contraction with argmax tracking.
+pub(super) fn contract_with_argmax<A: Algebra<Index = u32>>(
+    cpu: &Cpu,
+    a: &[A::Scalar],
+    shape_a: &[usize],
+    strides_a: &[usize],
+    modes_a: &[i32],
+    b: &[A::Scalar],
+    shape_b: &[usize],
+    strides_b: &[usize],
+    modes_b: &[i32],
+    shape_c: &[usize],
+    modes_c: &[i32],
+) -> (Vec<A::Scalar>, Vec<u32>)
+where
+    A::Scalar: crate::algebra::Scalar,
+{
+    // Same setup as contract
+    let a_contig = ensure_contiguous(a, shape_a, strides_a);
+    let b_contig = ensure_contiguous(b, shape_b, strides_b);
+    let (batch, left, right, contracted) = classify_modes(modes_a, modes_b, modes_c);
+    let batch_size = product_of_dims(&batch, modes_a, shape_a);
+    let left_size = product_of_dims(&left, modes_a, shape_a);
+    let right_size = product_of_dims(&right, modes_b, shape_b);
+    let contract_size = product_of_dims(&contracted, modes_a, shape_a);
+
+    let a_perm = compute_permutation(modes_a, &batch, &left, &contracted);
+    let a_permuted = permute_data(&a_contig, shape_a, &a_perm);
+    let b_perm = compute_permutation(modes_b, &batch, &contracted, &right);
+    let b_permuted = permute_data(&b_contig, shape_b, &b_perm);
+
+    // Call GEMM with argmax
+    let (c_data, argmax) = if batch.is_empty() {
+        cpu.gemm_with_argmax_internal::<A>(
+            &a_permuted, left_size, contract_size,
+            &b_permuted, right_size,
+        )
+    } else {
+        cpu.gemm_batched_with_argmax_internal::<A>(
+            &a_permuted, batch_size, left_size, contract_size,
+            &b_permuted, right_size,
+        )
+    };
+
+    // Permute result
+    let current_order: Vec<i32> = batch.iter()
+        .chain(left.iter())
+        .chain(right.iter())
+        .copied()
+        .collect();
+
+    if current_order == modes_c {
+        (c_data, argmax)
+    } else {
+        let c_shape_current: Vec<usize> = current_order
+            .iter()
+            .map(|&m| shape_c[mode_position(modes_c, m)])
+            .collect();
+        let out_perm: Vec<usize> = modes_c
+            .iter()
+            .map(|m| current_order.iter().position(|x| x == m).unwrap())
+            .collect();
+        (
+            permute_data(&c_data, &c_shape_current, &out_perm),
+            permute_data(&argmax, &c_shape_current, &out_perm),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

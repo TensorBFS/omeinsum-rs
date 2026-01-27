@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use omeco::{optimize_code, EinCode, GreedyMethod, Label, NestedEinsum, TreeSA};
 
 use crate::algebra::{Algebra, Scalar};
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendScalar};
 use crate::tensor::Tensor;
 
 /// Einsum specification and execution engine.
@@ -14,21 +14,25 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use omeinsum::Einsum;
+/// ```rust
+/// use omeinsum::{Einsum, Tensor, Cpu};
+/// use omeinsum::algebra::MaxPlus;
 /// use std::collections::HashMap;
 ///
-/// // A[i,j] × B[j,k] × C[k,l] → D[i,l]
-/// let sizes: HashMap<usize, usize> = [(0, 10), (1, 20), (2, 30), (3, 40)].into();
+/// // A[i,j] × B[j,k] → C[i,k]
+/// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+/// let b = Tensor::<f32, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
 ///
+/// let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
 /// let mut ein = Einsum::new(
-///     vec![vec![0, 1], vec![1, 2], vec![2, 3]],
-///     vec![0, 3],
+///     vec![vec![0, 1], vec![1, 2]],
+///     vec![0, 2],
 ///     sizes,
 /// );
 ///
 /// ein.optimize_greedy();
-/// let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a, &b, &c]);
+/// let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+/// assert_eq!(result.shape(), &[2, 2]);
 /// ```
 pub struct Einsum<L: Label = usize> {
     /// Input index labels for each tensor
@@ -108,7 +112,7 @@ impl Einsum<usize> {
     pub fn execute<A, T, B>(&self, tensors: &[&Tensor<T, B>]) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         assert_eq!(
@@ -147,7 +151,7 @@ impl Einsum<usize> {
     ) -> (Tensor<T, B>, Vec<Tensor<u32, B>>)
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         assert_eq!(
@@ -201,7 +205,7 @@ impl Einsum<usize> {
     ) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         match tree {
@@ -238,7 +242,7 @@ impl Einsum<usize> {
     ) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         if tensors.is_empty() {
@@ -311,7 +315,7 @@ impl Einsum<usize> {
     ) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         match tree {
@@ -335,7 +339,7 @@ impl Einsum<usize> {
     fn execute_pairwise<A, T, B>(&self, tensors: &[&Tensor<T, B>]) -> Tensor<T, B>
     where
         A: Algebra<Scalar = T, Index = u32>,
-        T: Scalar,
+        T: Scalar + BackendScalar<B>,
         B: Backend + Default,
     {
         if tensors.is_empty() {
@@ -481,6 +485,7 @@ fn compute_input_position(
 /// to index label `1`. This automatically handles diagonal extraction because
 /// `compute_input_position` uses `idx_values[&idx]` - when the same index label
 /// appears multiple times in `ix`, those positions will use the same value.
+#[allow(clippy::needless_range_loop)]
 pub(crate) fn execute_unary_naive<A, T, B>(
     tensor: &Tensor<T, B>,
     ix: &[usize],

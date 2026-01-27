@@ -7,11 +7,147 @@ mod storage;
 
 pub use storage::CudaStorage;
 
-use crate::algebra::Scalar;
 use cudarc::driver::CudaDevice;
 use cutensor::{contract, CacheKey, CutensorType, Handle, PlanCache, TensorDesc};
-use std::cell::RefCell;
-use std::sync::Arc;
+use num_complex::Complex;
+use std::sync::{Arc, Mutex};
+
+use crate::algebra::{Algebra, Scalar};
+use crate::backend::traits::{Backend, BackendScalar, Storage};
+
+// ============================================================================
+// CUDA-compatible complex number wrapper
+// ============================================================================
+//
+// Due to Rust's orphan rule, we cannot implement cudarc traits for num_complex
+// types directly. This generic newtype wrapper provides CUDA-compatible complex.
+
+/// CUDA-compatible wrapper for complex numbers.
+///
+/// This type has the same memory layout as `num_complex::Complex<T>` and CUDA's
+/// complex types, but can implement cudarc traits since it's a local type.
+///
+/// Use `CudaComplex<f32>` for single-precision and `CudaComplex<f64>` for double.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct CudaComplex<T>(pub Complex<T>);
+
+impl<T> CudaComplex<T> {
+    /// Create a new CudaComplex from real and imaginary parts.
+    pub fn new(re: T, im: T) -> Self {
+        CudaComplex(Complex::new(re, im))
+    }
+
+    /// Get the real part.
+    pub fn re(&self) -> T
+    where
+        T: Clone,
+    {
+        self.0.re.clone()
+    }
+
+    /// Get the imaginary part.
+    pub fn im(&self) -> T
+    where
+        T: Clone,
+    {
+        self.0.im.clone()
+    }
+}
+
+// SAFETY: CudaComplex<T> is repr(transparent) over Complex<T>, which is repr(C)
+// with two T fields. This is compatible with CUDA's complex types.
+unsafe impl<T: cudarc::driver::DeviceRepr> cudarc::driver::DeviceRepr for CudaComplex<T> {}
+// SAFETY: Zero-initialized CudaComplex<T> is valid if T is valid as zero bits.
+unsafe impl<T: cudarc::driver::ValidAsZeroBits> cudarc::driver::ValidAsZeroBits for CudaComplex<T> {}
+
+// Arithmetic for CudaComplex<f32>
+impl std::ops::Add for CudaComplex<f32> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        CudaComplex(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Mul for CudaComplex<f32> {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        CudaComplex(self.0 * rhs.0)
+    }
+}
+
+impl num_traits::Zero for CudaComplex<f32> {
+    fn zero() -> Self {
+        CudaComplex(Complex::new(0.0, 0.0))
+    }
+    fn is_zero(&self) -> bool {
+        self.0.re == 0.0 && self.0.im == 0.0
+    }
+}
+
+impl num_traits::One for CudaComplex<f32> {
+    fn one() -> Self {
+        CudaComplex(Complex::new(1.0, 0.0))
+    }
+}
+
+// Arithmetic for CudaComplex<f64>
+impl std::ops::Add for CudaComplex<f64> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        CudaComplex(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Mul for CudaComplex<f64> {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        CudaComplex(self.0 * rhs.0)
+    }
+}
+
+impl num_traits::Zero for CudaComplex<f64> {
+    fn zero() -> Self {
+        CudaComplex(Complex::new(0.0, 0.0))
+    }
+    fn is_zero(&self) -> bool {
+        self.0.re == 0.0 && self.0.im == 0.0
+    }
+}
+
+impl num_traits::One for CudaComplex<f64> {
+    fn one() -> Self {
+        CudaComplex(Complex::new(1.0, 0.0))
+    }
+}
+
+// CutensorType implementations
+impl CutensorType for CudaComplex<f32> {
+    const DATA: cutensor::sys::cutensorDataType_t = cutensor::sys::cutensorDataType_t::C_32F;
+    fn compute_desc() -> cutensor::sys::cutensorComputeDescriptor_t {
+        unsafe { cutensor::sys::CUTENSOR_COMPUTE_DESC_32F }
+    }
+}
+
+impl CutensorType for CudaComplex<f64> {
+    const DATA: cutensor::sys::cutensorDataType_t = cutensor::sys::cutensorDataType_t::C_64F;
+    fn compute_desc() -> cutensor::sys::cutensorComputeDescriptor_t {
+        unsafe { cutensor::sys::CUTENSOR_COMPUTE_DESC_64F }
+    }
+}
+
+// Conversion traits
+impl<T> From<Complex<T>> for CudaComplex<T> {
+    fn from(c: Complex<T>) -> Self {
+        CudaComplex(c)
+    }
+}
+
+impl<T> From<CudaComplex<T>> for Complex<T> {
+    fn from(c: CudaComplex<T>) -> Self {
+        c.0
+    }
+}
 
 /// CUDA backend for GPU tensor operations.
 ///
@@ -19,8 +155,26 @@ use std::sync::Arc;
 /// and tensor contractions via cuTENSOR.
 pub struct Cuda {
     device: Arc<CudaDevice>,
-    handle: RefCell<Option<Handle>>,
-    cache: RefCell<PlanCache>,
+    handle: Mutex<Option<Handle>>,
+    cache: Mutex<PlanCache>,
+}
+
+// SAFETY: Cuda is Send because all fields are Send.
+// The Mutex ensures safe concurrent access to handle and cache.
+unsafe impl Send for Cuda {}
+// SAFETY: Cuda is Sync because all fields are protected by Mutex.
+unsafe impl Sync for Cuda {}
+
+impl Clone for Cuda {
+    fn clone(&self) -> Self {
+        // Create a new Cuda instance sharing the same device
+        // but with fresh handle and cache (lazy initialization)
+        Self {
+            device: self.device.clone(),
+            handle: Mutex::new(None),
+            cache: Mutex::new(PlanCache::new(64)),
+        }
+    }
 }
 
 impl Cuda {
@@ -36,9 +190,9 @@ impl Cuda {
     pub fn on_device(ordinal: usize) -> Result<Self, CudaError> {
         let device = CudaDevice::new(ordinal).map_err(|e| CudaError::Device(e.to_string()))?;
         Ok(Self {
-            device: Arc::new(device),
-            handle: RefCell::new(None),
-            cache: RefCell::new(PlanCache::new(64)),
+            device,
+            handle: Mutex::new(None),
+            cache: Mutex::new(PlanCache::new(64)),
         })
     }
 
@@ -47,20 +201,19 @@ impl Cuda {
         &self.device
     }
 
-    /// Get a reference to the cuTENSOR handle, initializing it lazily if needed.
-    fn get_handle(&self) -> Result<std::cell::Ref<Handle>, CudaError> {
-        {
-            let mut h = self.handle.borrow_mut();
-            if h.is_none() {
-                *h = Some(
-                    Handle::new(self.device.clone())
-                        .map_err(|e| CudaError::Cutensor(format!("{}", e)))?,
-                );
-            }
+    /// Ensure the cuTENSOR handle is initialized and execute a function with it.
+    ///
+    /// This method acquires the handle lock and ensures the handle is initialized,
+    /// then calls the provided function with access to the handle.
+    fn with_handle<R>(&self, f: impl FnOnce(&Handle) -> Result<R, CudaError>) -> Result<R, CudaError> {
+        let mut h = self.handle.lock().unwrap();
+        if h.is_none() {
+            *h = Some(
+                Handle::new(self.device.clone())
+                    .map_err(|e| CudaError::Cutensor(format!("{}", e)))?,
+            );
         }
-        Ok(std::cell::Ref::map(self.handle.borrow(), |h| {
-            h.as_ref().unwrap()
-        }))
+        f(h.as_ref().unwrap())
     }
 
     /// Perform a tensor contraction using cuTENSOR.
@@ -84,7 +237,7 @@ impl Cuda {
     /// * `Ok(CudaStorage<T>)` containing the contraction result
     /// * `Err(CudaError)` if the contraction fails
     #[allow(clippy::too_many_arguments)]
-    pub fn contract<T>(
+    pub fn contract_cutensor<T>(
         &self,
         a: &CudaStorage<T>,
         shape_a: &[usize],
@@ -99,17 +252,14 @@ impl Cuda {
         modes_c: &[i32],
     ) -> Result<CudaStorage<T>, CudaError>
     where
-        T: Scalar + CutensorType + cudarc::driver::DeviceRepr + num_traits::One + num_traits::Zero,
+        T: CutensorType + cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits + num_traits::One + num_traits::Zero,
     {
-        // Create tensor descriptors
-        let handle = self.get_handle()?;
-
-        let desc_a = TensorDesc::new::<T>(&handle, shape_a, strides_a)
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
-        let desc_b = TensorDesc::new::<T>(&handle, shape_b, strides_b)
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
-        let desc_c = TensorDesc::new::<T>(&handle, shape_c, strides_c)
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+        // Allocate output storage first (outside of locks)
+        let len: usize = shape_c.iter().product();
+        let mut c = self
+            .device
+            .alloc_zeros::<T>(len)
+            .map_err(|e| CudaError::Alloc(e.to_string()))?;
 
         // Build cache key
         let key = CacheKey {
@@ -119,31 +269,43 @@ impl Cuda {
             dtype: T::DATA as u32,
         };
 
-        // Get or create the execution plan from cache
-        // Need to drop handle borrow before borrowing cache mutably
-        drop(handle);
+        // Do all cuTENSOR operations with both locks held
+        self.with_handle(|handle| {
+            // Create tensor descriptors
+            let desc_a = TensorDesc::new::<T>(handle, shape_a, strides_a)
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+            let desc_b = TensorDesc::new::<T>(handle, shape_b, strides_b)
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+            let desc_c = TensorDesc::new::<T>(handle, shape_c, strides_c)
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
 
-        let handle = self.get_handle()?;
-        let plan = self
-            .cache
-            .borrow_mut()
-            .get_or_create::<T>(
-                &handle, key, &desc_a, modes_a, &desc_b, modes_b, &desc_c, modes_c,
-            )
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+            // Get or create the execution plan from cache and execute contraction
+            let mut cache = self.cache.lock().unwrap();
+            let plan = cache
+                .get_or_create::<T>(
+                    handle, key, &desc_a, modes_a, &desc_b, modes_b, &desc_c, modes_c,
+                )
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
 
-        // Allocate output storage
-        let len: usize = shape_c.iter().product();
-        let mut c = self
-            .device
-            .alloc_zeros::<T>(len)
-            .map_err(|e| CudaError::Alloc(e.to_string()))?;
+            // Execute the contraction
+            contract::<T>(handle, plan, T::one(), a.slice(), b.slice(), &mut c)
+                .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
 
-        // Execute the contraction
-        contract::<T>(&handle, plan, T::one(), a.slice(), b.slice(), &mut c)
-            .map_err(|e| CudaError::Cutensor(format!("{}", e)))?;
+            Ok(())
+        })?;
 
         Ok(CudaStorage::new(c, self.device.clone()))
+    }
+
+    /// Compute column-major strides for a given shape.
+    fn compute_strides(shape: &[usize]) -> Vec<usize> {
+        let mut strides = Vec::with_capacity(shape.len());
+        let mut stride = 1;
+        for &dim in shape {
+            strides.push(stride);
+            stride *= dim;
+        }
+        strides
     }
 }
 
@@ -169,3 +331,262 @@ impl std::fmt::Display for CudaError {
 }
 
 impl std::error::Error for CudaError {}
+
+// ============================================================================
+// Marker trait for CUDA-compatible scalar types
+// ============================================================================
+
+/// Marker trait for scalar types that can be used with CUDA.
+///
+/// This unifies the requirements of `Scalar` (for the type system) and
+/// cudarc traits (for GPU operations). Types implementing this trait can
+/// be used with `CudaStorage` and CUDA tensor operations.
+pub trait CudaScalar:
+    Scalar
+    + cudarc::driver::DeviceRepr
+    + cudarc::driver::ValidAsZeroBits
+    + CutensorType
+    + num_traits::One
+    + num_traits::Zero
+{
+}
+
+impl CudaScalar for f32 {}
+impl CudaScalar for f64 {}
+
+// ============================================================================
+// Storage implementation for CudaStorage
+// ============================================================================
+
+// Note: Storage<T> requires Scalar, but CudaStorage needs device reference.
+// We implement Storage only for CudaScalar types and panic on from_slice/zeros
+// since those should be called via Backend::alloc/Backend::from_slice instead.
+
+impl<T: CudaScalar> Storage<T> for CudaStorage<T> {
+    fn len(&self) -> usize {
+        self.slice().len()
+    }
+
+    fn get(&self, index: usize) -> T {
+        // Download single element - slow but correct
+        let mut buf = vec![T::default()];
+        self.device()
+            .dtoh_sync_copy_into(self.slice(), &mut buf)
+            .expect("Failed to download from GPU");
+        buf[index]
+    }
+
+    fn set(&mut self, index: usize, value: T) {
+        // Download, modify, upload - slow but correct
+        let mut buf = self.to_vec();
+        buf[index] = value;
+        let new_slice = self.device()
+            .htod_sync_copy(&buf)
+            .expect("Failed to upload to GPU");
+        *self = CudaStorage::new(new_slice, self.device().clone());
+    }
+
+    fn to_vec(&self) -> Vec<T> {
+        self.device()
+            .dtoh_sync_copy(self.slice())
+            .expect("Failed to download from GPU")
+    }
+
+    fn from_slice(_data: &[T]) -> Self {
+        // Cannot create CudaStorage without device reference.
+        // Use Backend::from_slice instead.
+        panic!("CudaStorage::from_slice requires device context. Use Cuda::from_slice instead.")
+    }
+
+    fn zeros(_len: usize) -> Self {
+        // Cannot create CudaStorage without device reference.
+        // Use Backend::alloc instead.
+        panic!("CudaStorage::zeros requires device context. Use Cuda::alloc instead.")
+    }
+}
+
+impl<T: CudaScalar> Clone for CudaStorage<T> {
+    fn clone(&self) -> Self {
+        // Copy the data to a new allocation
+        let data = self.to_vec();
+        let new_slice = self.device()
+            .htod_sync_copy(&data)
+            .expect("Failed to clone CudaStorage");
+        CudaStorage::new(new_slice, self.device().clone())
+    }
+}
+
+// ============================================================================
+// Backend implementation for Cuda
+// ============================================================================
+
+impl Backend for Cuda {
+    type Storage<T: Scalar> = CudaStorage<T>;
+
+    fn name() -> &'static str {
+        "cuda"
+    }
+
+    fn synchronize(&self) {
+        self.device.synchronize().expect("Failed to synchronize CUDA device");
+    }
+
+    fn alloc<T: Scalar>(&self, len: usize) -> CudaStorage<T> {
+        // This will only work for CudaScalar types, but we can't express that
+        // in the type system here. Runtime check will catch unsupported types.
+        let slice = self.device
+            .alloc_zeros::<T>(len)
+            .expect("Failed to allocate CUDA memory");
+        CudaStorage::new(slice, self.device.clone())
+    }
+
+    fn from_slice<T: Scalar>(&self, data: &[T]) -> CudaStorage<T> {
+        let slice = self.device
+            .htod_sync_copy(data)
+            .expect("Failed to copy to CUDA device");
+        CudaStorage::new(slice, self.device.clone())
+    }
+
+    fn copy_strided<T: Scalar>(
+        &self,
+        src: &CudaStorage<T>,
+        shape: &[usize],
+        strides: &[usize],
+        offset: usize,
+    ) -> CudaStorage<T> {
+        // For now, download to CPU, copy with strides, upload back
+        // TODO: Implement strided copy kernel for GPU
+        let src_data = src.to_vec();
+        let numel: usize = shape.iter().product();
+        let mut dst_data = vec![T::default(); numel];
+
+        // Iterate over all indices and copy
+        let mut indices = vec![0usize; shape.len()];
+        for dst_elem in dst_data.iter_mut() {
+            // Compute source offset using strides
+            let src_offset: usize = offset
+                + indices
+                    .iter()
+                    .zip(strides.iter())
+                    .map(|(i, s)| i * s)
+                    .sum::<usize>();
+
+            *dst_elem = src_data[src_offset];
+
+            // Increment indices (column-major order)
+            for dim in 0..shape.len() {
+                indices[dim] += 1;
+                if indices[dim] < shape[dim] {
+                    break;
+                }
+                indices[dim] = 0;
+            }
+        }
+
+        self.from_slice(&dst_data)
+    }
+
+    fn contract<A: Algebra>(
+        &self,
+        a: &CudaStorage<A::Scalar>,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
+        b: &CudaStorage<A::Scalar>,
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
+    ) -> CudaStorage<A::Scalar>
+    where
+        A::Scalar: BackendScalar<Self>,
+    {
+        // Compute output strides (column-major)
+        let strides_c = Self::compute_strides(shape_c);
+
+        // Dispatch based on scalar type using type ID
+        use std::any::TypeId;
+
+        if TypeId::of::<A::Scalar>() == TypeId::of::<f32>() {
+            // SAFETY: We've verified the type is f32
+            let a_f32: &CudaStorage<f32> = unsafe { std::mem::transmute(a) };
+            let b_f32: &CudaStorage<f32> = unsafe { std::mem::transmute(b) };
+
+            let result = self.contract_cutensor(
+                a_f32, shape_a, strides_a, modes_a,
+                b_f32, shape_b, strides_b, modes_b,
+                shape_c, &strides_c, modes_c,
+            ).expect("cuTENSOR contraction failed");
+
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<A::Scalar>() == TypeId::of::<f64>() {
+            // SAFETY: We've verified the type is f64
+            let a_f64: &CudaStorage<f64> = unsafe { std::mem::transmute(a) };
+            let b_f64: &CudaStorage<f64> = unsafe { std::mem::transmute(b) };
+
+            let result = self.contract_cutensor(
+                a_f64, shape_a, strides_a, modes_a,
+                b_f64, shape_b, strides_b, modes_b,
+                shape_c, &strides_c, modes_c,
+            ).expect("cuTENSOR contraction failed");
+
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<A::Scalar>() == TypeId::of::<CudaComplex<f32>>() {
+            // SAFETY: We've verified the type is CudaComplex<f32>
+            let a_c32: &CudaStorage<CudaComplex<f32>> = unsafe { std::mem::transmute(a) };
+            let b_c32: &CudaStorage<CudaComplex<f32>> = unsafe { std::mem::transmute(b) };
+
+            let result = self.contract_cutensor(
+                a_c32, shape_a, strides_a, modes_a,
+                b_c32, shape_b, strides_b, modes_b,
+                shape_c, &strides_c, modes_c,
+            ).expect("cuTENSOR contraction failed");
+
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<A::Scalar>() == TypeId::of::<CudaComplex<f64>>() {
+            // SAFETY: We've verified the type is CudaComplex<f64>
+            let a_c64: &CudaStorage<CudaComplex<f64>> = unsafe { std::mem::transmute(a) };
+            let b_c64: &CudaStorage<CudaComplex<f64>> = unsafe { std::mem::transmute(b) };
+
+            let result = self.contract_cutensor(
+                a_c64, shape_a, strides_a, modes_a,
+                b_c64, shape_b, strides_b, modes_b,
+                shape_c, &strides_c, modes_c,
+            ).expect("cuTENSOR contraction failed");
+
+            unsafe { std::mem::transmute(result) }
+        } else {
+            panic!(
+                "CUDA backend only supports f32, f64, CudaComplex<f32>, and \
+                 CudaComplex<f64> for contractions. Got type: {:?}",
+                std::any::type_name::<A::Scalar>()
+            );
+        }
+    }
+
+    fn contract_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        _a: &CudaStorage<A::Scalar>,
+        _shape_a: &[usize],
+        _strides_a: &[usize],
+        _modes_a: &[i32],
+        _b: &CudaStorage<A::Scalar>,
+        _shape_b: &[usize],
+        _strides_b: &[usize],
+        _modes_b: &[i32],
+        _shape_c: &[usize],
+        _modes_c: &[i32],
+    ) -> (CudaStorage<A::Scalar>, CudaStorage<u32>)
+    where
+        A::Scalar: BackendScalar<Self>,
+    {
+        // cuTENSOR does not support argmax tracking.
+        // This would require a custom CUDA kernel.
+        panic!(
+            "CUDA backend does not support contract_with_argmax. \
+             cuTENSOR does not provide argmax tracking. \
+             A custom kernel would be needed for tropical backpropagation on GPU."
+        );
+    }
+}

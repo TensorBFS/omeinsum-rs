@@ -14,7 +14,7 @@
 //! This elegantly handles trace, sum, diagonal, transpose, and their gradients.
 
 use crate::algebra::{Algebra, Scalar};
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendScalar, Storage};
 use crate::tensor::Tensor;
 use std::collections::HashMap;
 
@@ -121,7 +121,7 @@ pub fn contract_binary_backward<A, T, B>(
 ) -> (Tensor<T, B>, Tensor<T, B>)
 where
     A: Algebra<Scalar = T, Index = u32>,
-    T: Scalar,
+    T: Scalar + BackendScalar<B>,
     B: Backend,
 {
     if A::needs_argmax() {
@@ -149,7 +149,7 @@ fn standard_backward<A, T, B>(
 ) -> (Tensor<T, B>, Tensor<T, B>)
 where
     A: Algebra<Scalar = T, Index = u32>,
-    T: Scalar,
+    T: Scalar + BackendScalar<B>,
     B: Backend,
 {
     // For C[iy] = A[ia] @ B[ib] (contraction over shared indices in ia and ib not in iy):
@@ -190,6 +190,7 @@ where
 ///
 /// For tropical algebras, gradients are routed through the argmax:
 /// only the "winning" element gets the gradient.
+#[allow(clippy::extra_unused_type_parameters)]
 fn tropical_backward<A, T, B>(
     grad_c: &Tensor<T, B>,
     a: &Tensor<T, B>,
@@ -218,8 +219,8 @@ where
     // For the simple 2D matmul case: C[i,j] = max_k (A[i,k] + B[k,j])
     // We need to scatter gradients using the argmax.
     //
-    // This requires accessing the backend's gemm_backward functions.
-    // For now, implement for 2D case (matmul).
+    // Generic implementation using tensor indexing
+    // (CPU backend has optimized internal methods, but this works for any backend)
 
     if a.ndim() == 2 && b.ndim() == 2 && grad_c.ndim() == 2 {
         // Matmul case: C[m,n] = A[m,k] * B[k,n]
@@ -227,37 +228,44 @@ where
         let k = a_shape[1];
         let n = b_shape[1];
 
-        // Make tensors contiguous for backend operations
+        // Make tensors contiguous for indexing
         let grad_c_contig = grad_c.contiguous();
-        let a_contig = a.contiguous();
-        let b_contig = b.contiguous();
         let argmax_contig = argmax.contiguous();
 
-        // Get storage references
-        let grad_c_storage = grad_c_contig
-            .storage()
-            .expect("contiguous tensor should have storage");
-        let b_storage = b_contig
-            .storage()
-            .expect("contiguous tensor should have storage");
-        let a_storage = a_contig
-            .storage()
-            .expect("contiguous tensor should have storage");
-        let argmax_storage = argmax_contig
-            .storage()
-            .expect("contiguous tensor should have storage");
+        // Get data as vectors for generic implementation
+        let grad_c_vec = grad_c_contig.to_vec();
+        let argmax_vec = argmax_contig.to_vec();
 
-        // Use backend functions
-        let grad_a_storage =
-            a.backend()
-                .gemm_backward_a::<A>(grad_c_storage, argmax_storage, b_storage, m, k, n);
+        // Initialize gradient storage
+        let mut grad_a_vec = vec![T::default(); m * k];
+        let mut grad_b_vec = vec![T::default(); k * n];
 
-        let grad_b_storage =
-            a.backend()
-                .gemm_backward_b::<A>(grad_c_storage, argmax_storage, a_storage, m, k, n);
+        // Route gradients through argmax (column-major indexing)
+        // Column-major: element (i, j) is at index j * nrows + i
+        for j in 0..n {
+            for i in 0..m {
+                let idx = j * m + i;
+                let winner_k = argmax_vec[idx] as usize;
+                let gc = grad_c_vec[idx];
 
-        let grad_a = Tensor::from_storage(grad_a_storage, a_shape, a.backend().clone());
-        let grad_b = Tensor::from_storage(grad_b_storage, b_shape, b.backend().clone());
+                // grad_a[i, winner_k] += grad_c[i, j]
+                grad_a_vec[winner_k * m + i] += gc;
+
+                // grad_b[winner_k, j] += grad_c[i, j]
+                grad_b_vec[j * k + winner_k] += gc;
+            }
+        }
+
+        let grad_a = Tensor::from_storage(
+            B::Storage::from_slice(&grad_a_vec),
+            a_shape,
+            a.backend().clone(),
+        );
+        let grad_b = Tensor::from_storage(
+            B::Storage::from_slice(&grad_b_vec),
+            b_shape,
+            b.backend().clone(),
+        );
 
         (grad_a, grad_b)
     } else {
@@ -352,7 +360,7 @@ mod tests {
         // Test backward pass for MaxPlus matmul
         // C[i,j] = max_k (A[i,k] + B[k,j])
         //
-        // Column-major: [1,2,3,4] for shape [2,2] → [[1,3],[2,4]]
+        // Column-major: [1,2,3,4] for shape [2,2] -> [[1,3],[2,4]]
         // A = [[1, 3], [2, 4]], B = [[1, 3], [2, 4]]
         // C[0,0] = max(1+1, 3+2) = max(2, 5) = 5, argmax = 1
         // C[1,0] = max(2+1, 4+2) = max(3, 6) = 6, argmax = 1
@@ -362,8 +370,9 @@ mod tests {
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
         let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-        // Compute forward to get argmax
-        let (c, argmax) = a.gemm_with_argmax::<MaxPlus<f32>>(&b);
+        // Compute forward using contract_binary_with_argmax
+        let (c, argmax) =
+            a.contract_binary_with_argmax::<MaxPlus<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
         assert_eq!(c.to_vec(), vec![5.0, 6.0, 7.0, 8.0]);
         assert_eq!(argmax.to_vec(), vec![1, 1, 1, 1]);
 
@@ -406,8 +415,8 @@ mod tests {
     #[test]
     fn test_tropical_backward_different_winners() {
         // Test case where different elements have different winners
-        // Column-major: [5,1,1,5] for shape [2,2] → [[5,1],[1,5]]
-        // Column-major: [1,5,5,1] for shape [2,2] → [[1,5],[5,1]]
+        // Column-major: [5,1,1,5] for shape [2,2] -> [[5,1],[1,5]]
+        // Column-major: [1,5,5,1] for shape [2,2] -> [[1,5],[5,1]]
         // A = [[5, 1], [1, 5]], B = [[1, 5], [5, 1]]
         // C[0,0] = max(5+1, 1+5) = max(6, 6) = 6, argmax = 0 (first wins on tie)
         // C[1,0] = max(1+1, 5+5) = max(2, 10) = 10, argmax = 1
@@ -417,7 +426,8 @@ mod tests {
         let a = Tensor::<f32, Cpu>::from_data(&[5.0, 1.0, 1.0, 5.0], &[2, 2]);
         let b = Tensor::<f32, Cpu>::from_data(&[1.0, 5.0, 5.0, 1.0], &[2, 2]);
 
-        let (c, argmax) = a.gemm_with_argmax::<MaxPlus<f32>>(&b);
+        let (c, argmax) =
+            a.contract_binary_with_argmax::<MaxPlus<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
         // Column-major: [6, 10, 10, 6]
         assert_eq!(c.to_vec(), vec![6.0, 10.0, 10.0, 6.0]);
         // Column-major argmax: [0, 1, 0, 0]

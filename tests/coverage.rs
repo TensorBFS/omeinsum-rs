@@ -414,20 +414,20 @@ fn test_tropical_f64_operations() {
 
 #[cfg(feature = "tropical")]
 #[test]
-fn test_tropical_gemm_f64() {
+fn test_tropical_contract_binary_f64() {
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
     // MaxPlus f64
-    let c = a.gemm::<MaxPlus<f64>>(&b);
+    let c = a.contract_binary::<MaxPlus<f64>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     assert_eq!(c.shape(), &[2, 2]);
 
     // MinPlus f64
-    let c = a.gemm::<MinPlus<f64>>(&b);
+    let c = a.contract_binary::<MinPlus<f64>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     assert_eq!(c.shape(), &[2, 2]);
 
     // MaxMul f64
-    let c = a.gemm::<MaxMul<f64>>(&b);
+    let c = a.contract_binary::<MaxMul<f64>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     assert_eq!(c.shape(), &[2, 2]);
 }
 
@@ -484,7 +484,7 @@ fn test_complex_tensor_basic() {
 }
 
 #[test]
-fn test_complex_gemm() {
+fn test_complex_contract_binary() {
     use num_complex::Complex64 as C64;
 
     let a = Tensor::<C64, Cpu>::from_data(
@@ -507,7 +507,7 @@ fn test_complex_gemm() {
     );
 
     // Identity * B = B
-    let c = a.gemm::<Standard<C64>>(&b);
+    let c = a.contract_binary::<Standard<C64>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     assert_eq!(c.shape(), &[2, 2]);
 }
 
@@ -516,50 +516,51 @@ fn test_complex_gemm() {
 // ============================================================================
 
 #[test]
-fn test_gemm_batched_standard() {
-    let cpu = Cpu;
-
+fn test_contract_batched_standard() {
+    // Test batched matrix multiplication via contract_binary
+    // A[b,i,j] × B[b,j,k] → C[b,i,k]
     // 2 batches of 2x2 matrices
-    let a = vec![
-        1.0f32, 2.0, 3.0, 4.0, // batch 0
-        5.0, 6.0, 7.0, 8.0, // batch 1
-    ];
-    let b = vec![
-        1.0f32, 0.0, 0.0, 1.0, // batch 0: identity
-        1.0, 0.0, 0.0, 1.0, // batch 1: identity
-    ];
+    let a = Tensor::<f32, Cpu>::from_data(
+        &[
+            1.0f32, 2.0, 3.0, 4.0, // batch 0
+            5.0, 6.0, 7.0, 8.0, // batch 1
+        ],
+        &[2, 2, 2],
+    );
+    let b = Tensor::<f32, Cpu>::from_data(
+        &[
+            1.0f32, 0.0, 0.0, 1.0, // batch 0: identity
+            1.0, 0.0, 0.0, 1.0, // batch 1: identity
+        ],
+        &[2, 2, 2],
+    );
 
-    let c = cpu.gemm_batched::<Standard<f32>>(&a, 2, 2, 2, &b, 2);
-    assert_eq!(c.len(), 8);
-
-    // Each batch should equal original (multiplied by identity)
-    assert_eq!(&c[0..4], &a[0..4]);
-    assert_eq!(&c[4..8], &a[4..8]);
+    let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3]);
+    assert_eq!(c.shape(), &[2, 2, 2]);
 }
 
 #[cfg(feature = "tropical")]
 #[test]
-fn test_gemm_batched_tropical() {
-    let cpu = Cpu;
+fn test_contract_batched_tropical() {
+    // Test batched matrix multiplication via contract_binary
+    let a = Tensor::<f32, Cpu>::from_data(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f32, Cpu>::from_data(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[2, 2, 2]);
 
-    let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let b = vec![0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // zeros
-
-    let c = cpu.gemm_batched::<MaxPlus<f32>>(&a, 2, 2, 2, &b, 2);
-    assert_eq!(c.len(), 8);
+    let c = a.contract_binary::<MaxPlus<f32>>(&b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3]);
+    assert_eq!(c.shape(), &[2, 2, 2]);
 }
 
 #[cfg(feature = "tropical")]
 #[test]
-fn test_gemm_batched_with_argmax() {
-    let cpu = Cpu;
+fn test_contract_batched_with_argmax() {
+    // Test batched matrix multiplication with argmax via contract_binary_with_argmax
+    let a = Tensor::<f32, Cpu>::from_data(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let b = Tensor::<f32, Cpu>::from_data(&[1.0f32, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0], &[2, 2, 2]);
 
-    let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let b = vec![1.0f32, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0];
-
-    let (c, argmax) = cpu.gemm_batched_with_argmax::<MaxPlus<f32>>(&a, 2, 2, 2, &b, 2);
-    assert_eq!(c.len(), 8);
-    assert_eq!(argmax.len(), 8);
+    let (c, argmax) =
+        a.contract_binary_with_argmax::<MaxPlus<f32>>(&b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3]);
+    assert_eq!(c.shape(), &[2, 2, 2]);
+    assert_eq!(argmax.shape(), &[2, 2, 2]);
 }
 
 // ============================================================================

@@ -30,6 +30,12 @@ pub trait Storage<T: Scalar>: Clone + Send + Sync + Sized {
     fn zeros(len: usize) -> Self;
 }
 
+/// Marker trait for scalar types supported by a specific backend.
+///
+/// This enables compile-time checking that a scalar type is supported
+/// by a particular backend (e.g., CUDA only supports f32/f64/complex).
+pub trait BackendScalar<B: Backend>: Scalar {}
+
 /// Backend trait for tensor execution.
 ///
 /// Defines how tensor operations are executed on different hardware.
@@ -61,95 +67,150 @@ pub trait Backend: Clone + Send + Sync + 'static {
         offset: usize,
     ) -> Self::Storage<T>;
 
-    /// General matrix multiplication.
+    /// Binary tensor contraction.
     ///
-    /// Computes C = A ⊗ B where ⊗ is the semiring multiplication
-    /// and the reduction uses semiring addition.
+    /// Computes a generalized tensor contraction: `C[modes_c] = Σ A[modes_a] ⊗ B[modes_b]`
+    /// where the sum (using semiring addition) is over indices appearing in both A and B
+    /// but not in the output C.
     ///
-    /// # Arguments
-    /// * `a` - Left matrix, row-major, shape [m, k]
-    /// * `b` - Right matrix, row-major, shape [k, n]
-    /// * `m`, `k`, `n` - Matrix dimensions
+    /// # Mode Labels
     ///
-    /// # Returns
-    /// Result matrix C, row-major, shape [m, n]
-    fn gemm<A: Algebra>(
-        &self,
-        a: &Self::Storage<A::Scalar>,
-        m: usize,
-        k: usize,
-        b: &Self::Storage<A::Scalar>,
-        n: usize,
-    ) -> Self::Storage<A::Scalar>;
-
-    /// GEMM with argmax tracking for tropical backpropagation.
+    /// Each mode (dimension) of the input tensors is labeled with a unique integer identifier.
+    /// These labels determine how the contraction is performed:
     ///
-    /// Returns (result, argmax) where argmax[i, j] is the k index
-    /// that "won" the reduction for element [i, j].
-    fn gemm_with_argmax<A: Algebra<Index = u32>>(
-        &self,
-        a: &Self::Storage<A::Scalar>,
-        m: usize,
-        k: usize,
-        b: &Self::Storage<A::Scalar>,
-        n: usize,
-    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>);
-
-    /// Backward pass for GEMM w.r.t. A.
-    ///
-    /// Given dC (gradient of output), computes dA (gradient of A).
-    fn gemm_backward_a<A: Algebra>(
-        &self,
-        grad_c: &Self::Storage<A::Scalar>,
-        argmax: &Self::Storage<u32>,
-        b: &Self::Storage<A::Scalar>,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Self::Storage<A::Scalar>;
-
-    /// Backward pass for GEMM w.r.t. B.
-    fn gemm_backward_b<A: Algebra>(
-        &self,
-        grad_c: &Self::Storage<A::Scalar>,
-        argmax: &Self::Storage<u32>,
-        a: &Self::Storage<A::Scalar>,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Self::Storage<A::Scalar>;
-
-    /// Batched GEMM: `C[b] = A[b] @ B[b]` for each batch.
+    /// - **Contracted indices**: Labels appearing in both `modes_a` and `modes_b` but NOT in
+    ///   `modes_c`. These dimensions are summed over (reduced).
+    /// - **Free indices from A**: Labels appearing only in `modes_a`. These appear in the output.
+    /// - **Free indices from B**: Labels appearing only in `modes_b`. These appear in the output.
+    /// - **Batch indices**: Labels appearing in `modes_a`, `modes_b`, AND `modes_c`.
+    ///   These dimensions are preserved and processed in parallel.
     ///
     /// # Arguments
-    /// * `a` - Left matrices, row-major, shape [batch_size, m, k]
-    /// * `b` - Right matrices, row-major, shape [batch_size, k, n]
-    /// * `batch_size` - Number of batches
-    /// * `m`, `k`, `n` - Matrix dimensions
+    ///
+    /// * `a` - Storage for first input tensor
+    /// * `shape_a` - Shape (dimensions) of tensor A
+    /// * `strides_a` - Strides for tensor A (column-major, supports non-contiguous tensors)
+    /// * `modes_a` - Mode labels for tensor A (length must equal `shape_a.len()`)
+    /// * `b` - Storage for second input tensor
+    /// * `shape_b` - Shape of tensor B
+    /// * `strides_b` - Strides for tensor B
+    /// * `modes_b` - Mode labels for tensor B (length must equal `shape_b.len()`)
+    /// * `shape_c` - Shape of output tensor C (must be consistent with `modes_c`)
+    /// * `modes_c` - Mode labels for output tensor C (determines output structure)
     ///
     /// # Returns
-    /// Result matrices C, row-major, shape [batch_size, m, n]
-    fn gemm_batched<A: Algebra>(
-        &self,
-        a: &Self::Storage<A::Scalar>,
-        batch_size: usize,
-        m: usize,
-        k: usize,
-        b: &Self::Storage<A::Scalar>,
-        n: usize,
-    ) -> Self::Storage<A::Scalar>;
-
-    /// Batched GEMM with argmax tracking.
     ///
-    /// Returns (result, argmax) where argmax[b, i, j] is the k index
-    /// that "won" the reduction for element [b, i, j].
-    fn gemm_batched_with_argmax<A: Algebra<Index = u32>>(
+    /// Contiguous storage containing the result tensor with shape `shape_c`.
+    ///
+    /// # Examples
+    ///
+    /// ## Matrix multiplication: `C[i,k] = Σⱼ A[i,j] ⊗ B[j,k]`
+    ///
+    /// ```ignore
+    /// // A is 2×3, B is 3×4 -> C is 2×4
+    /// let c = backend.contract::<Standard<f32>>(
+    ///     &a, &[2, 3], &[1, 2], &[0, 1],  // A[i=0, j=1], shape 2×3
+    ///     &b, &[3, 4], &[1, 3], &[1, 2],  // B[j=1, k=2], shape 3×4
+    ///     &[2, 4], &[0, 2],               // C[i=0, k=2], shape 2×4
+    /// );
+    /// ```
+    ///
+    /// ## Batched matrix multiplication: `C[b,i,k] = Σⱼ A[b,i,j] ⊗ B[b,j,k]`
+    ///
+    /// ```ignore
+    /// // Batch size 8, A is 2×3, B is 3×4 -> C is 8×2×4
+    /// let c = backend.contract::<Standard<f32>>(
+    ///     &a, &[8, 2, 3], &[1, 8, 16], &[0, 1, 2],  // A[b=0, i=1, j=2]
+    ///     &b, &[8, 3, 4], &[1, 8, 24], &[0, 2, 3],  // B[b=0, j=2, k=3]
+    ///     &[8, 2, 4], &[0, 1, 3],                    // C[b=0, i=1, k=3]
+    /// );
+    /// ```
+    ///
+    /// ## Tropical shortest path (with min-plus semiring)
+    ///
+    /// ```ignore
+    /// // Find shortest paths via matrix multiplication in (min,+) semiring
+    /// let distances = backend.contract::<MinPlus<f32>>(
+    ///     &graph_a, &[n, n], &[1, n], &[0, 1],
+    ///     &graph_b, &[n, n], &[1, n], &[1, 2],
+    ///     &[n, n], &[0, 2],
+    /// );
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - Mode labels have inconsistent sizes across tensors (e.g., if mode 1 has size 3
+    ///   in A but size 4 in B)
+    /// - The scalar type is not supported by the backend (compile-time check via `BackendScalar`)
+    #[allow(clippy::too_many_arguments)]
+    fn contract<A: Algebra>(
         &self,
         a: &Self::Storage<A::Scalar>,
-        batch_size: usize,
-        m: usize,
-        k: usize,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
         b: &Self::Storage<A::Scalar>,
-        n: usize,
-    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>);
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
+    ) -> Self::Storage<A::Scalar>
+    where
+        A::Scalar: BackendScalar<Self>;
+
+    /// Contraction with argmax tracking for tropical backpropagation.
+    ///
+    /// This is identical to [`Backend::contract`] but additionally returns an argmax
+    /// tensor that tracks which contracted index "won" the reduction at each output
+    /// position. This is essential for tropical algebra backward passes where gradients
+    /// are routed through the winning path only.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - `result`: The contraction result (same as `contract`)
+    /// - `argmax`: Tensor of `u32` indices indicating which contracted index won
+    ///   at each output position
+    ///
+    /// # Use Cases
+    ///
+    /// - Tropical backpropagation (Viterbi, shortest path)
+    /// - Computing attention patterns in max-pooling operations
+    /// - Any semiring where addition is idempotent and gradient routing matters
+    #[allow(clippy::too_many_arguments)]
+    fn contract_with_argmax<A: Algebra<Index = u32>>(
+        &self,
+        a: &Self::Storage<A::Scalar>,
+        shape_a: &[usize],
+        strides_a: &[usize],
+        modes_a: &[i32],
+        b: &Self::Storage<A::Scalar>,
+        shape_b: &[usize],
+        strides_b: &[usize],
+        modes_b: &[i32],
+        shape_c: &[usize],
+        modes_c: &[i32],
+    ) -> (Self::Storage<A::Scalar>, Self::Storage<u32>)
+    where
+        A::Scalar: BackendScalar<Self>;
+
 }
+
+// CPU supports all Scalar types
+impl<T: Scalar> BackendScalar<crate::backend::Cpu> for T {}
+
+// CUDA supports f32, f64, and complex types via cuTENSOR
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for f32 {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for f64 {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for crate::algebra::Complex32 {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for crate::algebra::Complex64 {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for crate::backend::CudaComplex<f32> {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for crate::backend::CudaComplex<f64> {}

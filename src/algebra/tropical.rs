@@ -4,8 +4,6 @@
 //! - [`MinPlus<T>`]: `(min, +)` semiring for shortest path
 //! - [`MaxMul<T>`]: `(max, ×)` semiring for max probability
 
-#![cfg(feature = "tropical")]
-
 use super::semiring::{Algebra, Semiring};
 use super::Scalar;
 use num_traits::{Bounded, One, Zero};
@@ -26,8 +24,8 @@ use num_traits::{Bounded, One, Zero};
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use omeinsum::algebra::MaxPlus;
+/// ```rust
+/// use omeinsum::algebra::{MaxPlus, Semiring};
 ///
 /// let a = MaxPlus(2.0f32);
 /// let b = MaxPlus(3.0f32);

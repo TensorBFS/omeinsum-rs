@@ -6,7 +6,7 @@
 use super::handle::*;
 use super::sys::cutensorContract;
 use super::{check, CutensorError};
-use cudarc::driver::CudaSlice;
+use cudarc::driver::{CudaSlice, DevicePtr};
 use std::collections::HashMap;
 
 /// Cache key for identifying unique tensor contraction configurations.
@@ -97,20 +97,6 @@ impl PlanCache {
         Ok(self.cache.get(&key).unwrap())
     }
 
-    /// Returns the number of plans currently in the cache.
-    pub fn len(&self) -> usize {
-        self.cache.len()
-    }
-
-    /// Returns true if the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
-    }
-
-    /// Clears all plans from the cache.
-    pub fn clear(&mut self) {
-        self.cache.clear();
-    }
 }
 
 /// Execute a tensor contraction using a pre-compiled plan.

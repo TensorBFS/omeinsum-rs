@@ -8,10 +8,10 @@ mod cpu;
 mod traits;
 
 pub use cpu::Cpu;
-pub use traits::{Backend, Storage};
+pub use traits::{Backend, BackendScalar, Storage};
 
 #[cfg(feature = "cuda")]
 mod cuda;
 
 #[cfg(feature = "cuda")]
-pub use cuda::{Cuda, CudaError, CudaStorage};
+pub use cuda::{Cuda, CudaComplex, CudaError, CudaStorage};

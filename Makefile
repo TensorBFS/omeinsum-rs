@@ -1,7 +1,7 @@
 # Makefile for omeinsum-rs
 # Automates environment setup, testing, documentation, and examples
 
-.PHONY: all build check test bench docs clean help
+.PHONY: all build check test test-gpu bench docs clean help
 .PHONY: setup setup-rust
 .PHONY: docs-build docs-serve docs-book docs-book-serve
 .PHONY: fmt clippy lint coverage
@@ -27,8 +27,9 @@ help:
 	@echo "  check          - Check for errors"
 	@echo ""
 	@echo "Test targets:"
-	@echo "  test           - Run all tests"
-	@echo "  test-release   - Run tests in release mode"
+	@echo "  test           - Run tests with non-GPU features (tropical, parallel)"
+	@echo "  test-gpu       - Run tests with all features including CUDA"
+	@echo "  test-release   - Run tests in release mode (non-GPU features)"
 	@echo ""
 	@echo "Benchmark targets:"
 	@echo "  bench          - Run benchmarks"
@@ -86,13 +87,18 @@ check:
 #==============================================================================
 
 test:
-	@echo "Running tests..."
-	cargo test --no-default-features
+	@echo "Running tests with non-GPU features (tropical, parallel)..."
+	cargo test --features "tropical parallel"
+	@echo "Tests complete."
+
+test-gpu:
+	@echo "Running tests with all features (including CUDA)..."
+	cargo test --features "tropical parallel cuda"
 	@echo "Tests complete."
 
 test-release:
-	@echo "Running tests in release mode..."
-	cargo test --release --no-default-features
+	@echo "Running tests in release mode (non-GPU features)..."
+	cargo test --release --features "tropical parallel"
 	@echo "Tests complete."
 
 #==============================================================================

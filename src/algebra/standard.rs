@@ -10,8 +10,8 @@ use num_traits::{One, Zero};
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use omeinsum::algebra::Standard;
+/// ```rust
+/// use omeinsum::algebra::{Standard, Semiring};
 ///
 /// let a = Standard(2.0f32);
 /// let b = Standard(3.0f32);

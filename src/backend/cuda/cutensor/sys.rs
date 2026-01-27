@@ -15,8 +15,11 @@ pub type cutensorPlanPreference_t = *mut c_void;
 pub type cutensorPlan_t = *mut c_void;
 
 /// Status codes returned by cuTENSOR functions.
+/// Note: These variants are used in pattern matching but Rust's dead_code
+/// analysis doesn't recognize that as "construction".
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum cutensorStatus_t {
     SUCCESS = 0,
     NOT_INITIALIZED = 1,
@@ -26,7 +29,7 @@ pub enum cutensorStatus_t {
     NOT_SUPPORTED = 15,
 }
 
-/// Data types supported by cuTENSOR.
+/// Data types supported by cuTENSOR (cuTENSOR 2.x values).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub enum cutensorDataType_t {
@@ -36,25 +39,44 @@ pub enum cutensorDataType_t {
     C_64F = 5,
 }
 
-/// Compute descriptor types for specifying computation precision.
-#[repr(C)]
+/// Opaque compute descriptor type (cuTENSOR 2.x uses mutable pointers).
+pub type cutensorComputeDescriptor_t = *mut c_void;
+
+// Predefined compute descriptors from cuTENSOR 2.x
+// These are global symbols exported by libcutensor.so
+#[link(name = "cutensor")]
+extern "C" {
+    pub static CUTENSOR_COMPUTE_DESC_32F: cutensorComputeDescriptor_t;
+    pub static CUTENSOR_COMPUTE_DESC_64F: cutensorComputeDescriptor_t;
+}
+
+/// Unary operators that can be applied to tensor elements.
+#[repr(u32)]
 #[derive(Debug, Clone, Copy)]
-pub enum cutensorComputeDescriptor_t {
-    COMPUTE_32F = 0x40,
-    COMPUTE_64F = 0x41,
+pub enum cutensorOperator_t {
+    IDENTITY = 1,
 }
 
-/// Workspace size preference for operation planning.
-#[repr(C)]
+/// Workspace size preference for operation planning (cuTENSOR 2.x values).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
 pub enum cutensorWorksizePreference_t {
-    DEFAULT = 0,
+    DEFAULT = 2,
 }
 
-/// Default algorithm selection.
-pub const ALGO_DEFAULT: u32 = 0;
+/// Algorithm selection (cuTENSOR 2.x values).
+#[repr(i32)]
+#[derive(Debug, Clone, Copy)]
+pub enum cutensorAlgo_t {
+    DEFAULT = -1,
+}
 
-/// Disable JIT compilation.
-pub const JIT_MODE_NONE: u32 = 0;
+/// JIT compilation mode.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
+pub enum cutensorJitMode_t {
+    NONE = 0,
+}
 
 #[link(name = "cutensor")]
 extern "C" {
@@ -79,21 +101,21 @@ extern "C" {
     pub fn cutensorDestroyTensorDescriptor(desc: cutensorTensorDescriptor_t) -> cutensorStatus_t;
 
     /// Create a contraction operation descriptor.
+    /// D = alpha * opA(A) * opB(B) + beta * opC(C)
     pub fn cutensorCreateContraction(
         handle: cutensorHandle_t,
         desc: *mut cutensorOperationDescriptor_t,
         desc_a: cutensorTensorDescriptor_t,
         modes_a: *const i32,
-        align_a: u32,
+        op_a: cutensorOperator_t,
         desc_b: cutensorTensorDescriptor_t,
         modes_b: *const i32,
-        align_b: u32,
+        op_b: cutensorOperator_t,
         desc_c: cutensorTensorDescriptor_t,
         modes_c: *const i32,
-        align_c: u32,
+        op_c: cutensorOperator_t,
         desc_d: cutensorTensorDescriptor_t,
         modes_d: *const i32,
-        align_d: u32,
         compute: cutensorComputeDescriptor_t,
     ) -> cutensorStatus_t;
 
@@ -106,8 +128,8 @@ extern "C" {
     pub fn cutensorCreatePlanPreference(
         handle: cutensorHandle_t,
         pref: *mut cutensorPlanPreference_t,
-        algo: u32,
-        jit: u32,
+        algo: cutensorAlgo_t,
+        jit: cutensorJitMode_t,
     ) -> cutensorStatus_t;
 
     /// Destroy a plan preference object.

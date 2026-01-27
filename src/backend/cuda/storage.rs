@@ -53,3 +53,15 @@ impl<T: DeviceRepr + Clone> CudaStorage<T> {
         self.device.dtoh_sync_copy(&self.slice)
     }
 }
+
+// SAFETY: CudaStorage<T> can be sent between threads because:
+// - CudaSlice<T> internally uses a CUDA device pointer which is thread-safe
+// - Arc<CudaDevice> is Send
+// The actual GPU memory is managed by the CUDA runtime which handles synchronization.
+unsafe impl<T: Send> Send for CudaStorage<T> {}
+
+// SAFETY: CudaStorage<T> can be shared between threads because:
+// - CudaSlice<T> only provides immutable access through &self methods
+// - Arc<CudaDevice> is Sync
+// - CUDA operations are synchronized by the runtime
+unsafe impl<T: Sync> Sync for CudaStorage<T> {}

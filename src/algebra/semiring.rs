@@ -87,4 +87,11 @@ pub trait Algebra: Semiring {
     fn needs_argmax() -> bool {
         false
     }
+
+    /// Check if `self` is "better" than `other` for tropical selection.
+    ///
+    /// For MaxPlus: returns true if self > other
+    /// For MinPlus: returns true if self < other
+    /// For Standard: not meaningful (always false)
+    fn is_better(&self, other: &Self) -> bool;
 }

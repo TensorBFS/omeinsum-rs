@@ -135,6 +135,12 @@ where
     fn needs_argmax() -> bool {
         true
     }
+
+    #[inline]
+    fn is_better(&self, other: &Self) -> bool {
+        // MaxPlus: larger is better
+        self.0 > other.0
+    }
 }
 
 // ============================================================================
@@ -248,6 +254,12 @@ where
     #[inline]
     fn needs_argmax() -> bool {
         true
+    }
+
+    #[inline]
+    fn is_better(&self, other: &Self) -> bool {
+        // MinPlus: smaller is better
+        self.0 < other.0
     }
 }
 
@@ -363,6 +375,12 @@ where
     #[inline]
     fn needs_argmax() -> bool {
         true
+    }
+
+    #[inline]
+    fn is_better(&self, other: &Self) -> bool {
+        // MaxMul: larger is better (same as MaxPlus)
+        self.0 > other.0
     }
 }
 

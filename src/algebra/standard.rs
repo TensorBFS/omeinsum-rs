@@ -107,6 +107,12 @@ impl<
     fn needs_argmax() -> bool {
         false
     }
+
+    #[inline]
+    fn is_better(&self, _other: &Self) -> bool {
+        // Standard algebra accumulates all values, no "better" comparison
+        false
+    }
 }
 
 #[cfg(test)]

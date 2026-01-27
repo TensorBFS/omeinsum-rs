@@ -60,7 +60,7 @@ pub mod tensor;
 
 // Re-exports
 pub use algebra::{Algebra, Complex32, Complex64, Semiring, Standard};
-pub use backend::{Backend, Cpu};
+pub use backend::{Backend, BackendScalar, Cpu, Storage};
 pub use einsum::{einsum, einsum_with_grad, EinBuilder, Einsum};
 pub use tensor::{Tensor, TensorView};
 

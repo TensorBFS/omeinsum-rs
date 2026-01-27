@@ -27,14 +27,13 @@ use omeinsum::backend::{Cuda, CudaComplex, CudaStorage};
 // instead of `num_complex::Complex<T>` directly. This is needed due to Rust's
 // orphan rule - we can't implement cudarc traits for external types.
 //
-// **No einsum_with_grad for CUDA**: The autodiff function `einsum_with_grad`
-// requires `B: Backend`, but `Cuda` only provides the low-level `contract` API.
-// The manual backward tests below demonstrate gradient computation using
-// cuTENSOR contractions directly.
+// **Backend trait**: `Cuda` implements the `Backend` trait, enabling use with
+// the unified `einsum()` API. However, `contract_with_argmax` is not supported
+// (cuTENSOR doesn't provide argmax tracking), so tropical backpropagation
+// requires custom kernels.
 //
-// To enable full CUDA autodiff, we would need:
-// - Implement Backend trait for Cuda (significant work)
-// - Or use the low-level contract API manually (as shown in tests below)
+// **Manual backward tests**: The tests below demonstrate gradient computation
+// using low-level cuTENSOR contractions directly via `contract_cutensor()`.
 
 /// Test that CUDA device initialization works.
 #[test]
@@ -88,7 +87,7 @@ fn test_matmul_f32() {
     // C[i,k] = sum_j A[i,j] * B[j,k]
     // Row-major: A is 2x3 with strides [3,1], B is 3x2 with strides [2,1]
     let c = cuda
-        .contract::<f32>(
+        .contract_cutensor::<f32>(
             &a,
             &[2, 3],
             &[3, 1],
@@ -133,7 +132,7 @@ fn test_matmul_f64() {
 
     // C[i,k] = sum_j A[i,j] * B[j,k]
     let c = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2, 2],
             &[2, 1],
@@ -201,7 +200,7 @@ fn test_inner_product() {
     // shapes: A[4], B[4], C[] (scalar - 0-dimensional tensor)
     // Note: For scalar outputs, shape/strides must be empty to match empty modes
     let c = cuda
-        .contract::<f32>(
+        .contract_cutensor::<f32>(
             &a,
             &[4],
             &[1],
@@ -249,7 +248,7 @@ fn test_outer_product() {
 
     // C[i,j] = A[i] * B[j] (no contraction, just outer product)
     let c = cuda
-        .contract::<f32>(
+        .contract_cutensor::<f32>(
             &a,
             &[3],
             &[1],
@@ -309,7 +308,7 @@ fn test_batch_matmul() {
     // Shapes: A[2,2,2], B[2,2,2], C[2,2,2]
     // Row-major strides: A[4,2,1], B[4,2,1], C[4,2,1]
     let c = cuda
-        .contract::<f32>(
+        .contract_cutensor::<f32>(
             &a,
             &[2, 2, 2],
             &[4, 2, 1],
@@ -384,7 +383,7 @@ fn test_tensor3_contraction_f64() {
     // Shapes: A[2,2,2] with strides [4,2,1], B[2,2,2] with strides [4,2,1]
     // Result: C[2,2] with strides [2,1]
     let c = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2, 2, 2],
             &[4, 2, 1],
@@ -443,7 +442,7 @@ fn test_trace_f64() {
 
     // c = sum_{i,j} A[i,j] * 1
     let c = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[3, 3],
             &[3, 1],
@@ -469,12 +468,12 @@ fn test_trace_f64() {
 }
 
 // ============================================================================
-// Manual Gradient Tests (CUDA autodiff simulation)
+// Manual Gradient Tests (CUDA autodiff via cuTENSOR)
 // ============================================================================
 //
-// Note: The `einsum_with_grad` function requires `B: Backend`, but `Cuda` only
-// provides the low-level `contract` API. These tests verify gradient computation
-// using manual backward passes via cuTENSOR contractions.
+// These tests verify gradient computation using manual backward passes via
+// cuTENSOR contractions. While `Cuda` implements `Backend` and can use the
+// unified einsum API, these tests demonstrate the low-level approach.
 //
 // For C = A @ B (matmul), the gradients are:
 //   grad_A = grad_C @ B^T
@@ -505,7 +504,7 @@ fn test_cuda_manual_backward_matmul_f64() {
 
     // Forward pass: C = A @ B
     let c = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2, 2],
             &[2, 1],
@@ -538,7 +537,7 @@ fn test_cuda_manual_backward_matmul_f64() {
     // grad_A[i,j] = sum_k grad_C[i,k] * B[j,k]
     // Using einsum: grad_A[i,j] = grad_C[i,k] * B[j,k] summed over k
     let grad_a = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &grad_out,
             &[2, 2],
             &[2, 1],
@@ -581,7 +580,7 @@ fn test_cuda_manual_backward_matmul_f64() {
     // grad_B = A^T @ grad_C
     // grad_B[j,k] = sum_i A[i,j] * grad_C[i,k]
     let grad_b = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2, 2],
             &[2, 1],
@@ -647,7 +646,7 @@ fn test_cuda_manual_backward_rectangular_f64() {
 
     // Forward pass: C = A @ B (2x3 @ 3x2 = 2x2)
     let c = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2, 3],
             &[3, 1],
@@ -678,7 +677,7 @@ fn test_cuda_manual_backward_rectangular_f64() {
 
     // grad_A = grad_C @ B^T (2x2 @ 2x3 = 2x3)
     let grad_a = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &grad_out,
             &[2, 2],
             &[2, 1],
@@ -705,7 +704,7 @@ fn test_cuda_manual_backward_rectangular_f64() {
 
     // grad_B = A^T @ grad_C (3x2 @ 2x2 = 3x2)
     let grad_b = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2, 3],
             &[3, 1],
@@ -757,7 +756,7 @@ fn test_cuda_manual_backward_outer_product_f64() {
 
     // Forward: C[i,j] = A[i] * B[j]
     let c = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &a,
             &[2],
             &[1],
@@ -791,7 +790,7 @@ fn test_cuda_manual_backward_outer_product_f64() {
 
     // grad_A[i] = sum_j grad_C[i,j] * B[j]
     let grad_a = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &grad_out,
             &[2, 3],
             &[3, 1],
@@ -814,7 +813,7 @@ fn test_cuda_manual_backward_outer_product_f64() {
 
     // grad_B[j] = sum_i grad_C[i,j] * A[i]
     let grad_b = cuda
-        .contract::<f64>(
+        .contract_cutensor::<f64>(
             &grad_out,
             &[2, 3],
             &[3, 1],
@@ -920,7 +919,7 @@ fn test_matmul_complex64() {
 
     // C[i,k] = sum_j A[i,j] * B[j,k]
     let c = cuda
-        .contract::<CudaComplex<f64>>(
+        .contract_cutensor::<CudaComplex<f64>>(
             &a,
             &[2, 2],
             &[2, 1],
@@ -997,7 +996,7 @@ fn test_inner_product_complex64() {
 
     // c = sum_i A[i] * B[i]
     let c = cuda
-        .contract::<CudaComplex<f64>>(
+        .contract_cutensor::<CudaComplex<f64>>(
             &a,
             &[2],
             &[1],
@@ -1063,7 +1062,7 @@ fn test_outer_product_complex64() {
 
     // C[i,j] = A[i] * B[j]
     let c = cuda
-        .contract::<CudaComplex<f64>>(
+        .contract_cutensor::<CudaComplex<f64>>(
             &a,
             &[2],
             &[1],
@@ -1145,7 +1144,7 @@ fn test_cuda_manual_backward_matmul_complex64() {
 
     // Forward: C = A @ I = A
     let c = cuda
-        .contract::<CudaComplex<f64>>(
+        .contract_cutensor::<CudaComplex<f64>>(
             &a,
             &[2, 2],
             &[2, 1],
@@ -1179,7 +1178,7 @@ fn test_cuda_manual_backward_matmul_complex64() {
 
     // grad_A = grad_C @ B^T = grad_C @ I = grad_C = ones
     let grad_a = cuda
-        .contract::<CudaComplex<f64>>(
+        .contract_cutensor::<CudaComplex<f64>>(
             &grad_out,
             &[2, 2],
             &[2, 1],

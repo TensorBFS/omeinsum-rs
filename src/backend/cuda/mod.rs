@@ -358,21 +358,18 @@ impl CudaScalar for f64 {}
 // Storage implementation for CudaStorage
 // ============================================================================
 
-// Note: Storage<T> requires Scalar, but CudaStorage needs device reference.
-// We implement Storage only for CudaScalar types and panic on from_slice/zeros
-// since those should be called via Backend::alloc/Backend::from_slice instead.
+// Note: Storage<T> requires Scalar, but actual CUDA operations need CudaScalar.
+// We implement Storage<T> for all T: Scalar to satisfy Backend::Storage bounds,
+// but the actual implementations use type dispatch and panic for unsupported types.
 
-impl<T: CudaScalar> Storage<T> for CudaStorage<T> {
+impl<T: Scalar> Storage<T> for CudaStorage<T> {
     fn len(&self) -> usize {
+        use cudarc::driver::DeviceSlice;
         self.slice().len()
     }
 
     fn get(&self, index: usize) -> T {
-        // Download single element - slow but correct
-        let mut buf = vec![T::default()];
-        self.device()
-            .dtoh_sync_copy_into(self.slice(), &mut buf)
-            .expect("Failed to download from GPU");
+        let buf = self.to_vec();
         buf[index]
     }
 
@@ -380,39 +377,69 @@ impl<T: CudaScalar> Storage<T> for CudaStorage<T> {
         // Download, modify, upload - slow but correct
         let mut buf = self.to_vec();
         buf[index] = value;
-        let new_slice = self.device()
-            .htod_sync_copy(&buf)
-            .expect("Failed to upload to GPU");
-        *self = CudaStorage::new(new_slice, self.device().clone());
+        // Re-upload via type dispatch
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let buf_f32: Vec<f32> = unsafe { std::mem::transmute(buf) };
+            let new_slice = self.device().htod_sync_copy(&buf_f32).expect("Failed to upload");
+            *self = CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone());
+        } else if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let buf_f64: Vec<f64> = unsafe { std::mem::transmute(buf) };
+            let new_slice = self.device().htod_sync_copy(&buf_f64).expect("Failed to upload");
+            *self = CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone());
+        } else {
+            panic!("CudaStorage::set not supported for type {:?}", std::any::type_name::<T>());
+        }
     }
 
     fn to_vec(&self) -> Vec<T> {
-        self.device()
-            .dtoh_sync_copy(self.slice())
-            .expect("Failed to download from GPU")
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let slice_f32: &cudarc::driver::CudaSlice<f32> = unsafe { std::mem::transmute(self.slice()) };
+            let result = self.device().dtoh_sync_copy(slice_f32).expect("Failed to download");
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let slice_f64: &cudarc::driver::CudaSlice<f64> = unsafe { std::mem::transmute(self.slice()) };
+            let result = self.device().dtoh_sync_copy(slice_f64).expect("Failed to download");
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<T>() == TypeId::of::<u32>() {
+            let slice_u32: &cudarc::driver::CudaSlice<u32> = unsafe { std::mem::transmute(self.slice()) };
+            let result = self.device().dtoh_sync_copy(slice_u32).expect("Failed to download");
+            unsafe { std::mem::transmute(result) }
+        } else {
+            panic!("CudaStorage::to_vec not supported for type {:?}", std::any::type_name::<T>());
+        }
     }
 
     fn from_slice(_data: &[T]) -> Self {
         // Cannot create CudaStorage without device reference.
-        // Use Backend::from_slice instead.
         panic!("CudaStorage::from_slice requires device context. Use Cuda::from_slice instead.")
     }
 
     fn zeros(_len: usize) -> Self {
         // Cannot create CudaStorage without device reference.
-        // Use Backend::alloc instead.
         panic!("CudaStorage::zeros requires device context. Use Cuda::alloc instead.")
     }
 }
 
-impl<T: CudaScalar> Clone for CudaStorage<T> {
+impl<T: Scalar> Clone for CudaStorage<T> {
     fn clone(&self) -> Self {
-        // Copy the data to a new allocation
-        let data = self.to_vec();
-        let new_slice = self.device()
-            .htod_sync_copy(&data)
-            .expect("Failed to clone CudaStorage");
-        CudaStorage::new(new_slice, self.device().clone())
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let data: Vec<f32> = unsafe { std::mem::transmute(self.to_vec()) };
+            let new_slice = self.device().htod_sync_copy(&data).expect("Failed to clone");
+            CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
+        } else if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let data: Vec<f64> = unsafe { std::mem::transmute(self.to_vec()) };
+            let new_slice = self.device().htod_sync_copy(&data).expect("Failed to clone");
+            CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
+        } else if TypeId::of::<T>() == TypeId::of::<u32>() {
+            let data: Vec<u32> = unsafe { std::mem::transmute(self.to_vec()) };
+            let new_slice = self.device().htod_sync_copy(&data).expect("Failed to clone");
+            CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
+        } else {
+            panic!("CudaStorage::clone not supported for type {:?}", std::any::type_name::<T>());
+        }
     }
 }
 
@@ -432,19 +459,38 @@ impl Backend for Cuda {
     }
 
     fn alloc<T: Scalar>(&self, len: usize) -> CudaStorage<T> {
-        // This will only work for CudaScalar types, but we can't express that
-        // in the type system here. Runtime check will catch unsupported types.
-        let slice = self.device
-            .alloc_zeros::<T>(len)
-            .expect("Failed to allocate CUDA memory");
-        CudaStorage::new(slice, self.device.clone())
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let slice = self.device.alloc_zeros::<f32>(len).expect("Failed to allocate");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let slice = self.device.alloc_zeros::<f64>(len).expect("Failed to allocate");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<u32>() {
+            let slice = self.device.alloc_zeros::<u32>(len).expect("Failed to allocate");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else {
+            panic!("CUDA alloc not supported for type {:?}", std::any::type_name::<T>());
+        }
     }
 
     fn from_slice<T: Scalar>(&self, data: &[T]) -> CudaStorage<T> {
-        let slice = self.device
-            .htod_sync_copy(data)
-            .expect("Failed to copy to CUDA device");
-        CudaStorage::new(slice, self.device.clone())
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+            let slice = self.device.htod_sync_copy(data_f32).expect("Failed to copy");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+            let slice = self.device.htod_sync_copy(data_f64).expect("Failed to copy");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<u32>() {
+            let data_u32: &[u32] = unsafe { std::mem::transmute(data) };
+            let slice = self.device.htod_sync_copy(data_u32).expect("Failed to copy");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else {
+            panic!("CUDA from_slice not supported for type {:?}", std::any::type_name::<T>());
+        }
     }
 
     fn copy_strided<T: Scalar>(
@@ -454,8 +500,8 @@ impl Backend for Cuda {
         strides: &[usize],
         offset: usize,
     ) -> CudaStorage<T> {
-        // For now, download to CPU, copy with strides, upload back
-        // TODO: Implement strided copy kernel for GPU
+        // Download to CPU, copy with strides, upload back
+        // Storage::to_vec handles type dispatch
         let src_data = src.to_vec();
         let numel: usize = shape.iter().product();
         let mut dst_data = vec![T::default(); numel];
@@ -483,6 +529,7 @@ impl Backend for Cuda {
             }
         }
 
+        // from_slice handles type dispatch
         self.from_slice(&dst_data)
     }
 

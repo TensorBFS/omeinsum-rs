@@ -206,11 +206,6 @@ impl<T: Scalar> BackendScalar<crate::backend::Cpu> for T {}
 impl BackendScalar<crate::backend::Cuda> for f32 {}
 #[cfg(feature = "cuda")]
 impl BackendScalar<crate::backend::Cuda> for f64 {}
-#[cfg(feature = "cuda")]
-impl BackendScalar<crate::backend::Cuda> for crate::algebra::Complex32 {}
-#[cfg(feature = "cuda")]
-impl BackendScalar<crate::backend::Cuda> for crate::algebra::Complex64 {}
-#[cfg(feature = "cuda")]
-impl BackendScalar<crate::backend::Cuda> for crate::backend::CudaComplex<f32> {}
-#[cfg(feature = "cuda")]
-impl BackendScalar<crate::backend::Cuda> for crate::backend::CudaComplex<f64> {}
+// Note: CudaComplex types are handled internally but don't implement Scalar
+// Users should use f32/f64 for contractions, complex support via CudaComplex
+// is internal to the CUDA backend

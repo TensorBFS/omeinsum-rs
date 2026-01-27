@@ -13,13 +13,13 @@ fn test_maxplus_associativity() {
     let b = Tensor::<f32, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
     let c = Tensor::<f32, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
 
-    // (A @ B) @ C
-    let ab = a.gemm::<MaxPlus<f32>>(&b);
-    let abc_left = ab.gemm::<MaxPlus<f32>>(&c);
+    // (A @ B) @ C using contract_binary
+    let ab = a.contract_binary::<MaxPlus<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
+    let abc_left = ab.contract_binary::<MaxPlus<f32>>(&c, &[0, 1], &[1, 2], &[0, 2]);
 
     // A @ (B @ C)
-    let bc = b.gemm::<MaxPlus<f32>>(&c);
-    let abc_right = a.gemm::<MaxPlus<f32>>(&bc);
+    let bc = b.contract_binary::<MaxPlus<f32>>(&c, &[0, 1], &[1, 2], &[0, 2]);
+    let abc_right = a.contract_binary::<MaxPlus<f32>>(&bc, &[0, 1], &[1, 2], &[0, 2]);
 
     assert_eq!(abc_left.to_vec(), abc_right.to_vec());
 }
@@ -44,7 +44,7 @@ fn test_minplus_shortest_path() {
     );
 
     // MinPlus matmul gives 2-hop shortest paths
-    let d2 = dist.gemm::<MinPlus<f32>>(&dist);
+    let d2 = dist.contract_binary::<MinPlus<f32>>(&dist, &[0, 1], &[1, 2], &[0, 2]);
     let d2_vec = d2.to_vec();
 
     // d2[0,2] = min over k of (dist[0,k] + dist[k,2])
@@ -67,7 +67,7 @@ fn test_tropical_identity() {
     let neg_inf = f32::NEG_INFINITY;
     let identity = Tensor::<f32, Cpu>::from_data(&[0.0, neg_inf, neg_inf, 0.0], &[2, 2]);
 
-    let result = a.gemm::<MaxPlus<f32>>(&identity);
+    let result = a.contract_binary::<MaxPlus<f32>>(&identity, &[0, 1], &[1, 2], &[0, 2]);
     assert_eq!(result.to_vec(), a.to_vec());
 }
 
@@ -78,7 +78,7 @@ fn test_minplus_identity() {
     let inf = f32::INFINITY;
     let identity = Tensor::<f32, Cpu>::from_data(&[0.0, inf, inf, 0.0], &[2, 2]);
 
-    let result = a.gemm::<MinPlus<f32>>(&identity);
+    let result = a.contract_binary::<MinPlus<f32>>(&identity, &[0, 1], &[1, 2], &[0, 2]);
     assert_eq!(result.to_vec(), a.to_vec());
 }
 
@@ -88,12 +88,12 @@ fn test_minplus_identity() {
 fn test_maxmul_operations() {
     // MaxMul: max(a, b), a * b
     // Used for max probability (non-log space)
-    // Column-major: [0.5, 0.3, 0.2, 0.8] for shape [2,2] → A = [[0.5, 0.2], [0.3, 0.8]]
-    // Column-major: [0.9, 0.1, 0.4, 0.6] for shape [2,2] → B = [[0.9, 0.4], [0.1, 0.6]]
+    // Column-major: [0.5, 0.3, 0.2, 0.8] for shape [2,2] -> A = [[0.5, 0.2], [0.3, 0.8]]
+    // Column-major: [0.9, 0.1, 0.4, 0.6] for shape [2,2] -> B = [[0.9, 0.4], [0.1, 0.6]]
     let a = Tensor::<f32, Cpu>::from_data(&[0.5, 0.3, 0.2, 0.8], &[2, 2]);
     let b = Tensor::<f32, Cpu>::from_data(&[0.9, 0.1, 0.4, 0.6], &[2, 2]);
 
-    let c = a.gemm::<MaxMul<f32>>(&b);
+    let c = a.contract_binary::<MaxMul<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
 
     // C[i,k] = max_j (A[i,j] * B[j,k])
     // C[0,0] = max(0.5*0.9, 0.2*0.1) = max(0.45, 0.02) = 0.45
@@ -158,7 +158,7 @@ fn test_maxplus_viterbi_example() {
     let initial = Tensor::<f32, Cpu>::from_data(&[0.0, -1.0], &[2, 1]);
 
     // After one step: max over starting state
-    let after_one = transitions.gemm::<MaxPlus<f32>>(&initial);
+    let after_one = transitions.contract_binary::<MaxPlus<f32>>(&initial, &[0, 1], &[1, 2], &[0, 2]);
 
     // state 0: max(-1+0, -2+(-1)) = max(-1, -3) = -1
     // state 1: max(-3+0, -1+(-1)) = max(-3, -2) = -2
@@ -193,7 +193,7 @@ fn test_minplus_bellman_ford_step() {
     let dist = Tensor::<f32, Cpu>::from_data(&[0.0, inf, inf], &[3, 1]);
 
     // One relaxation step
-    let new_dist = weights.gemm::<MinPlus<f32>>(&dist);
+    let new_dist = weights.contract_binary::<MinPlus<f32>>(&dist, &[0, 1], &[1, 2], &[0, 2]);
 
     // Should find direct paths from node 0:
     // to 0: min(0+0, inf+inf, inf+inf) = 0

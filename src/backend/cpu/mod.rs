@@ -11,7 +11,13 @@ use std::any::TypeId;
 pub struct Cpu;
 
 impl Cpu {
-    /// Internal GEMM for contraction (not part of Backend trait).
+    /// General matrix multiplication (internal implementation).
+    ///
+    /// Computes C = A ⊗ B where ⊗ is the semiring multiplication
+    /// and the reduction uses semiring addition.
+    ///
+    /// This is an internal implementation detail used by the contract method.
+    /// Users should use `einsum()` or `contract_binary()` instead.
     pub(crate) fn gemm_internal<A: Algebra>(
         &self,
         a: &[A::Scalar],
@@ -20,10 +26,116 @@ impl Cpu {
         b: &[A::Scalar],
         n: usize,
     ) -> Vec<A::Scalar> {
-        self.gemm::<A>(&a.to_vec(), m, k, &b.to_vec(), n)
+        // Fast path: faer for Standard f32/f64
+        if TypeId::of::<A>() == TypeId::of::<Standard<f32>>() {
+            // SAFETY: A::Scalar is f32 when A is Standard<f32>
+            let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
+            let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
+            let result = faer_gemm_f32(a_f32, m, k, b_f32, n);
+            return unsafe { std::mem::transmute(result) };
+        }
+        if TypeId::of::<A>() == TypeId::of::<Standard<f64>>() {
+            let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
+            let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
+            let result = faer_gemm_f64(a_f64, m, k, b_f64, n);
+            return unsafe { std::mem::transmute(result) };
+        }
+
+        // Try to use optimized tropical-gemm if available
+        #[cfg(feature = "tropical-kernels")]
+        {
+            if let Some(result) = try_tropical_gemm::<A>(a, m, k, b, n) {
+                return result;
+            }
+        }
+
+        // Fallback to generic loop implementation
+        generic_gemm::<A>(a, m, k, b, n)
     }
 
-    /// Internal batched GEMM for contraction.
+    /// GEMM with argmax tracking (internal implementation).
+    ///
+    /// Returns (result, argmax) where argmax[i, j] is the k index
+    /// that "won" the reduction for element [i, j].
+    pub(crate) fn gemm_with_argmax_internal<A: Algebra<Index = u32>>(
+        &self,
+        a: &[A::Scalar],
+        m: usize,
+        k: usize,
+        b: &[A::Scalar],
+        n: usize,
+    ) -> (Vec<A::Scalar>, Vec<u32>) {
+        // Try to use optimized tropical-gemm if available
+        #[cfg(feature = "tropical-kernels")]
+        {
+            if let Some(result) = try_tropical_gemm_with_argmax::<A>(a, m, k, b, n) {
+                return result;
+            }
+        }
+
+        // Fallback to generic loop implementation
+        generic_gemm_with_argmax::<A>(a, m, k, b, n)
+    }
+
+    /// Backward pass for GEMM w.r.t. A (internal implementation).
+    /// Used primarily for testing CPU-specific backward implementations.
+    #[allow(dead_code)]
+    pub(crate) fn gemm_backward_a_internal<A: Algebra>(
+        &self,
+        grad_c: &[A::Scalar],
+        argmax: &[u32],
+        _b: &[A::Scalar],
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<A::Scalar> {
+        let mut grad_a = vec![A::Scalar::default(); m * k];
+
+        // For tropical: grad_a[i, argmax[i,j]] += grad_c[i,j]
+        // For standard: grad_a = grad_c @ b.T
+        // Column-major: element (i, j) is at index j * nrows + i
+        if A::needs_argmax() {
+            for j in 0..n {
+                for i in 0..m {
+                    let idx = argmax[j * m + i] as usize; // argmax[i, j] in column-major
+                                                          // grad_a[i, idx] += grad_c[i, j]
+                    grad_a[idx * m + i] += grad_c[j * m + i];
+                }
+            }
+        }
+
+        grad_a
+    }
+
+    /// Backward pass for GEMM w.r.t. B (internal implementation).
+    /// Used primarily for testing CPU-specific backward implementations.
+    #[allow(dead_code)]
+    pub(crate) fn gemm_backward_b_internal<A: Algebra>(
+        &self,
+        grad_c: &[A::Scalar],
+        argmax: &[u32],
+        _a: &[A::Scalar],
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<A::Scalar> {
+        let mut grad_b = vec![A::Scalar::default(); k * n];
+
+        // Column-major: element (i, j) is at index j * nrows + i
+        if A::needs_argmax() {
+            for j in 0..n {
+                for i in 0..m {
+                    let idx = argmax[j * m + i] as usize; // argmax[i, j] in column-major
+                                                          // grad_b[idx, j] += grad_c[i, j]
+                    grad_b[j * k + idx] += grad_c[j * m + i];
+                }
+            }
+        }
+
+        grad_b
+    }
+
+    /// Batched GEMM (internal implementation).
     pub(crate) fn gemm_batched_internal<A: Algebra>(
         &self,
         a: &[A::Scalar],
@@ -33,20 +145,28 @@ impl Cpu {
         b: &[A::Scalar],
         n: usize,
     ) -> Vec<A::Scalar> {
-        self.gemm_batched::<A>(&a.to_vec(), batch_size, m, k, &b.to_vec(), n)
+        let a_batch_stride = m * k;
+        let b_batch_stride = k * n;
+        let c_batch_stride = m * n;
+
+        let mut c = vec![A::zero().to_scalar(); batch_size * m * n];
+
+        for batch in 0..batch_size {
+            let a_offset = batch * a_batch_stride;
+            let b_offset = batch * b_batch_stride;
+            let c_offset = batch * c_batch_stride;
+
+            let a_slice = &a[a_offset..a_offset + a_batch_stride];
+            let b_slice = &b[b_offset..b_offset + b_batch_stride];
+
+            let c_batch = generic_gemm::<A>(a_slice, m, k, b_slice, n);
+            c[c_offset..c_offset + c_batch_stride].copy_from_slice(&c_batch);
+        }
+
+        c
     }
 
-    pub(crate) fn gemm_with_argmax_internal<A: Algebra<Index = u32>>(
-        &self,
-        a: &[A::Scalar],
-        m: usize,
-        k: usize,
-        b: &[A::Scalar],
-        n: usize,
-    ) -> (Vec<A::Scalar>, Vec<u32>) {
-        self.gemm_with_argmax::<A>(&a.to_vec(), m, k, &b.to_vec(), n)
-    }
-
+    /// Batched GEMM with argmax tracking (internal implementation).
     pub(crate) fn gemm_batched_with_argmax_internal<A: Algebra<Index = u32>>(
         &self,
         a: &[A::Scalar],
@@ -56,7 +176,27 @@ impl Cpu {
         b: &[A::Scalar],
         n: usize,
     ) -> (Vec<A::Scalar>, Vec<u32>) {
-        self.gemm_batched_with_argmax::<A>(&a.to_vec(), batch_size, m, k, &b.to_vec(), n)
+        let a_batch_stride = m * k;
+        let b_batch_stride = k * n;
+        let c_batch_stride = m * n;
+
+        let mut c = vec![A::zero().to_scalar(); batch_size * m * n];
+        let mut argmax = vec![0u32; batch_size * m * n];
+
+        for batch in 0..batch_size {
+            let a_offset = batch * a_batch_stride;
+            let b_offset = batch * b_batch_stride;
+            let c_offset = batch * c_batch_stride;
+
+            let a_slice = &a[a_offset..a_offset + a_batch_stride];
+            let b_slice = &b[b_offset..b_offset + b_batch_stride];
+
+            let (c_batch, argmax_batch) = generic_gemm_with_argmax::<A>(a_slice, m, k, b_slice, n);
+            c[c_offset..c_offset + c_batch_stride].copy_from_slice(&c_batch);
+            argmax[c_offset..c_offset + c_batch_stride].copy_from_slice(&argmax_batch);
+        }
+
+        (c, argmax)
     }
 }
 
@@ -191,175 +331,6 @@ impl Backend for Cpu {
         }
 
         dst
-    }
-
-    fn gemm<A: Algebra>(
-        &self,
-        a: &Vec<A::Scalar>,
-        m: usize,
-        k: usize,
-        b: &Vec<A::Scalar>,
-        n: usize,
-    ) -> Vec<A::Scalar> {
-        // Fast path: faer for Standard f32/f64
-        if TypeId::of::<A>() == TypeId::of::<Standard<f32>>() {
-            // SAFETY: A::Scalar is f32 when A is Standard<f32>
-            let a_f32: &[f32] = unsafe { std::mem::transmute(a.as_slice()) };
-            let b_f32: &[f32] = unsafe { std::mem::transmute(b.as_slice()) };
-            let result = faer_gemm_f32(a_f32, m, k, b_f32, n);
-            return unsafe { std::mem::transmute(result) };
-        }
-        if TypeId::of::<A>() == TypeId::of::<Standard<f64>>() {
-            let a_f64: &[f64] = unsafe { std::mem::transmute(a.as_slice()) };
-            let b_f64: &[f64] = unsafe { std::mem::transmute(b.as_slice()) };
-            let result = faer_gemm_f64(a_f64, m, k, b_f64, n);
-            return unsafe { std::mem::transmute(result) };
-        }
-
-        // Try to use optimized tropical-gemm if available
-        #[cfg(feature = "tropical-kernels")]
-        {
-            if let Some(result) = try_tropical_gemm::<A>(a, m, k, b, n) {
-                return result;
-            }
-        }
-
-        // Fallback to generic loop implementation
-        generic_gemm::<A>(a, m, k, b, n)
-    }
-
-    fn gemm_with_argmax<A: Algebra<Index = u32>>(
-        &self,
-        a: &Vec<A::Scalar>,
-        m: usize,
-        k: usize,
-        b: &Vec<A::Scalar>,
-        n: usize,
-    ) -> (Vec<A::Scalar>, Vec<u32>) {
-        // Try to use optimized tropical-gemm if available
-        #[cfg(feature = "tropical-kernels")]
-        {
-            if let Some(result) = try_tropical_gemm_with_argmax::<A>(a, m, k, b, n) {
-                return result;
-            }
-        }
-
-        // Fallback to generic loop implementation
-        generic_gemm_with_argmax::<A>(a, m, k, b, n)
-    }
-
-    fn gemm_backward_a<A: Algebra>(
-        &self,
-        grad_c: &Vec<A::Scalar>,
-        argmax: &Vec<u32>,
-        _b: &Vec<A::Scalar>,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Vec<A::Scalar> {
-        let mut grad_a = vec![A::Scalar::default(); m * k];
-
-        // For tropical: grad_a[i, argmax[i,j]] += grad_c[i,j]
-        // For standard: grad_a = grad_c @ b.T
-        // Column-major: element (i, j) is at index j * nrows + i
-        if A::needs_argmax() {
-            for j in 0..n {
-                for i in 0..m {
-                    let idx = argmax[j * m + i] as usize; // argmax[i, j] in column-major
-                                                          // grad_a[i, idx] += grad_c[i, j]
-                    grad_a[idx * m + i] += grad_c[j * m + i];
-                }
-            }
-        }
-
-        grad_a
-    }
-
-    fn gemm_backward_b<A: Algebra>(
-        &self,
-        grad_c: &Vec<A::Scalar>,
-        argmax: &Vec<u32>,
-        _a: &Vec<A::Scalar>,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Vec<A::Scalar> {
-        let mut grad_b = vec![A::Scalar::default(); k * n];
-
-        // Column-major: element (i, j) is at index j * nrows + i
-        if A::needs_argmax() {
-            for j in 0..n {
-                for i in 0..m {
-                    let idx = argmax[j * m + i] as usize; // argmax[i, j] in column-major
-                                                          // grad_b[idx, j] += grad_c[i, j]
-                    grad_b[j * k + idx] += grad_c[j * m + i];
-                }
-            }
-        }
-
-        grad_b
-    }
-
-    fn gemm_batched<A: Algebra>(
-        &self,
-        a: &Vec<A::Scalar>,
-        batch_size: usize,
-        m: usize,
-        k: usize,
-        b: &Vec<A::Scalar>,
-        n: usize,
-    ) -> Vec<A::Scalar> {
-        let a_batch_stride = m * k;
-        let b_batch_stride = k * n;
-        let c_batch_stride = m * n;
-
-        let mut c = vec![A::zero().to_scalar(); batch_size * m * n];
-
-        for batch in 0..batch_size {
-            let a_offset = batch * a_batch_stride;
-            let b_offset = batch * b_batch_stride;
-            let c_offset = batch * c_batch_stride;
-
-            let a_slice = &a[a_offset..a_offset + a_batch_stride];
-            let b_slice = &b[b_offset..b_offset + b_batch_stride];
-
-            let c_batch = generic_gemm::<A>(a_slice, m, k, b_slice, n);
-            c[c_offset..c_offset + c_batch_stride].copy_from_slice(&c_batch);
-        }
-
-        c
-    }
-
-    fn gemm_batched_with_argmax<A: Algebra<Index = u32>>(
-        &self,
-        a: &Vec<A::Scalar>,
-        batch_size: usize,
-        m: usize,
-        k: usize,
-        b: &Vec<A::Scalar>,
-        n: usize,
-    ) -> (Vec<A::Scalar>, Vec<u32>) {
-        let a_batch_stride = m * k;
-        let b_batch_stride = k * n;
-        let c_batch_stride = m * n;
-
-        let mut c = vec![A::zero().to_scalar(); batch_size * m * n];
-        let mut argmax = vec![0u32; batch_size * m * n];
-
-        for batch in 0..batch_size {
-            let a_offset = batch * a_batch_stride;
-            let b_offset = batch * b_batch_stride;
-            let c_offset = batch * c_batch_stride;
-
-            let a_slice = &a[a_offset..a_offset + a_batch_stride];
-            let b_slice = &b[b_offset..b_offset + b_batch_stride];
-
-            let (c_batch, argmax_batch) = generic_gemm_with_argmax::<A>(a_slice, m, k, b_slice, n);
-            c[c_offset..c_offset + c_batch_stride].copy_from_slice(&c_batch);
-            argmax[c_offset..c_offset + c_batch_stride].copy_from_slice(&argmax_batch);
-        }
-
-        (c, argmax)
     }
 }
 
@@ -688,7 +659,7 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0, 4.0]; // 2x2
         let b = vec![1.0f32, 2.0, 3.0, 4.0]; // 2x2
 
-        let c = cpu.gemm::<Standard<f32>>(&a, 2, 2, &b, 2);
+        let c = cpu.gemm_internal::<Standard<f32>>(&a, 2, 2, &b, 2);
 
         // [1 2] × [1 2] = [1*1+2*3  1*2+2*4] = [7  10]
         // [3 4]   [3 4]   [3*1+4*3  3*2+4*4]   [15 22]
@@ -702,7 +673,7 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0, 4.0]; // 2x2
         let b = vec![1.0f32, 2.0, 3.0, 4.0]; // 2x2
 
-        let c = cpu.gemm::<MaxPlus<f32>>(&a, 2, 2, &b, 2);
+        let c = cpu.gemm_internal::<MaxPlus<f32>>(&a, 2, 2, &b, 2);
 
         // MaxPlus: C[i,j] = max_k(A[i,k] + B[k,j])
         // C[0,0] = max(1+1, 2+3) = max(2, 5) = 5
@@ -719,7 +690,7 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0, 4.0];
         let b = vec![1.0f32, 2.0, 3.0, 4.0];
 
-        let (c, argmax) = cpu.gemm_with_argmax::<MaxPlus<f32>>(&a, 2, 2, &b, 2);
+        let (c, argmax) = cpu.gemm_with_argmax_internal::<MaxPlus<f32>>(&a, 2, 2, &b, 2);
 
         assert_eq!(c, vec![5.0, 6.0, 7.0, 8.0]);
         // All winners should be k=1 (second column of A, second row of B)
@@ -760,7 +731,7 @@ mod tests {
         let b: Vec<f32> = (0..k * n).map(|i| (i % 100) as f32).collect();
 
         // Test MaxPlus<f32>
-        let c_opt = cpu.gemm::<MaxPlus<f32>>(&a, m, k, &b, n);
+        let c_opt = cpu.gemm_internal::<MaxPlus<f32>>(&a, m, k, &b, n);
         let c_generic = generic_gemm::<MaxPlus<f32>>(&a, m, k, &b, n);
 
         for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
@@ -788,7 +759,7 @@ mod tests {
         let b: Vec<f32> = (0..k * n).map(|i| (i % 50) as f32).collect();
 
         // Test MinPlus<f32>
-        let c_opt = cpu.gemm::<MinPlus<f32>>(&a, m, k, &b, n);
+        let c_opt = cpu.gemm_internal::<MinPlus<f32>>(&a, m, k, &b, n);
         let c_generic = generic_gemm::<MinPlus<f32>>(&a, m, k, &b, n);
 
         for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
@@ -817,7 +788,7 @@ mod tests {
         let b: Vec<f32> = (0..k * n).map(|i| ((i % 10) as f32) * 0.1 + 0.1).collect();
 
         // Test MaxMul<f32>
-        let c_opt = cpu.gemm::<MaxMul<f32>>(&a, m, k, &b, n);
+        let c_opt = cpu.gemm_internal::<MaxMul<f32>>(&a, m, k, &b, n);
         let c_generic = generic_gemm::<MaxMul<f32>>(&a, m, k, &b, n);
 
         for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
@@ -845,7 +816,7 @@ mod tests {
         let b: Vec<f32> = (0..k * n).map(|i| (i % 100) as f32).collect();
 
         // Test MaxPlus<f32> with argmax
-        let (c_opt, argmax_opt) = cpu.gemm_with_argmax::<MaxPlus<f32>>(&a, m, k, &b, n);
+        let (c_opt, argmax_opt) = cpu.gemm_with_argmax_internal::<MaxPlus<f32>>(&a, m, k, &b, n);
         let (c_generic, argmax_generic) = generic_gemm_with_argmax::<MaxPlus<f32>>(&a, m, k, &b, n);
 
         for (i, (opt, gen)) in c_opt.iter().zip(c_generic.iter()).enumerate() {
@@ -874,11 +845,11 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // 2x3
         let b = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // 3x2
 
-        let (_c, argmax) = cpu.gemm_with_argmax::<MaxPlus<f32>>(&a, 2, 3, &b, 2);
+        let (_c, argmax) = cpu.gemm_with_argmax_internal::<MaxPlus<f32>>(&a, 2, 3, &b, 2);
 
         let grad_c = vec![1.0f32; 4];
-        let grad_a = cpu.gemm_backward_a::<MaxPlus<f32>>(&grad_c, &argmax, &b, 2, 3, 2);
-        let grad_b = cpu.gemm_backward_b::<MaxPlus<f32>>(&grad_c, &argmax, &a, 2, 3, 2);
+        let grad_a = cpu.gemm_backward_a_internal::<MaxPlus<f32>>(&grad_c, &argmax, &b, 2, 3, 2);
+        let grad_b = cpu.gemm_backward_b_internal::<MaxPlus<f32>>(&grad_c, &argmax, &a, 2, 3, 2);
 
         assert_eq!(grad_a.len(), 6);
         assert_eq!(grad_b.len(), 6);

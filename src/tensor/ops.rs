@@ -1,6 +1,6 @@
-//! Tensor operations including GEMM and contraction.
+//! Tensor operations for contraction.
 
-use super::{compute_contiguous_strides, Tensor};
+use super::Tensor;
 use crate::algebra::{Algebra, Scalar};
 use crate::backend::{Backend, BackendScalar};
 
@@ -23,106 +23,6 @@ fn compute_output_shape(
 }
 
 impl<T: Scalar, B: Backend> Tensor<T, B> {
-    /// General matrix multiplication using the specified algebra.
-    ///
-    /// Computes C = A ⊗ B where:
-    /// - ⊗ is element-wise semiring multiplication
-    /// - Reduction uses semiring addition
-    ///
-    /// # Type Parameters
-    ///
-    /// * `A` - The algebra (e.g., `Standard<f32>`, `MaxPlus<f32>`)
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use omeinsum::{Tensor, Cpu};
-    /// use omeinsum::algebra::{Standard, MaxPlus};
-    ///
-    /// let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    /// let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    ///
-    /// // Standard: C[i,j] = Σ_k A[i,k] × B[k,j]
-    /// let c_std = a.gemm::<Standard<f32>>(&b);
-    ///
-    /// // Tropical: C[i,j] = max_k (A[i,k] + B[k,j])
-    /// let c_trop = a.gemm::<MaxPlus<f32>>(&b);
-    /// ```
-    pub fn gemm<A: Algebra<Scalar = T>>(&self, other: &Self) -> Self {
-        assert_eq!(self.ndim(), 2, "gemm requires 2D tensors");
-        assert_eq!(other.ndim(), 2, "gemm requires 2D tensors");
-        assert_eq!(
-            self.shape[1], other.shape[0],
-            "gemm dimension mismatch: [{}, {}] × [{}, {}]",
-            self.shape[0], self.shape[1], other.shape[0], other.shape[1]
-        );
-
-        let m = self.shape[0];
-        let k = self.shape[1];
-        let n = other.shape[1];
-
-        // Ensure inputs are contiguous
-        let a = self.contiguous();
-        let b = other.contiguous();
-
-        // Call backend GEMM
-        let c_storage = self.backend.gemm::<A>(&a.storage, m, k, &b.storage, n);
-
-        Self::from_raw(
-            c_storage,
-            vec![m, n],
-            compute_contiguous_strides(&[m, n]),
-            0,
-            self.backend.clone(),
-        )
-    }
-
-    /// GEMM with argmax tracking for backpropagation.
-    ///
-    /// Returns `(result, argmax)` where `argmax[i, j]` is the index `k`
-    /// that "won" the reduction for element `[i, j]`.
-    pub fn gemm_with_argmax<A: Algebra<Scalar = T, Index = u32>>(
-        &self,
-        other: &Self,
-    ) -> (Self, Tensor<u32, B>) {
-        assert_eq!(self.ndim(), 2, "gemm requires 2D tensors");
-        assert_eq!(other.ndim(), 2, "gemm requires 2D tensors");
-        assert_eq!(
-            self.shape[1], other.shape[0],
-            "gemm dimension mismatch: [{}, {}] × [{}, {}]",
-            self.shape[0], self.shape[1], other.shape[0], other.shape[1]
-        );
-
-        let m = self.shape[0];
-        let k = self.shape[1];
-        let n = other.shape[1];
-
-        let a = self.contiguous();
-        let b = other.contiguous();
-
-        let (c_storage, argmax_storage) = self
-            .backend
-            .gemm_with_argmax::<A>(&a.storage, m, k, &b.storage, n);
-
-        let c = Self::from_raw(
-            c_storage,
-            vec![m, n],
-            compute_contiguous_strides(&[m, n]),
-            0,
-            self.backend.clone(),
-        );
-
-        let argmax = Tensor::<u32, B>::from_raw(
-            argmax_storage,
-            vec![m, n],
-            compute_contiguous_strides(&[m, n]),
-            0,
-            self.backend.clone(),
-        );
-
-        (c, argmax)
-    }
-
     /// Binary tensor contraction using reshape-to-GEMM strategy.
     ///
     /// # Arguments
@@ -250,11 +150,12 @@ mod tests {
     use crate::algebra::MaxPlus;
 
     #[test]
-    fn test_gemm_standard() {
+    fn test_contract_binary_matmul_standard() {
+        // A[i,j] × B[j,k] → C[i,k] (matrix multiplication)
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
         let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-        let c = a.gemm::<Standard<f32>>(&b);
+        let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
 
         assert_eq!(c.shape(), &[2, 2]);
         assert_eq!(c.to_vec(), vec![7.0, 10.0, 15.0, 22.0]);
@@ -262,11 +163,12 @@ mod tests {
 
     #[cfg(feature = "tropical")]
     #[test]
-    fn test_gemm_maxplus() {
+    fn test_contract_binary_matmul_maxplus() {
+        // A[i,j] × B[j,k] → C[i,k] (tropical matrix multiplication)
         let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
         let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-        let c = a.gemm::<MaxPlus<f32>>(&b);
+        let c = a.contract_binary::<MaxPlus<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
 
         assert_eq!(c.shape(), &[2, 2]);
         assert_eq!(c.to_vec(), vec![5.0, 6.0, 7.0, 8.0]);

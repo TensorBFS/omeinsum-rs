@@ -114,23 +114,6 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
         }
     }
 
-    /// Create from raw storage (internal use).
-    pub(crate) fn from_raw(
-        storage: B::Storage<T>,
-        shape: Vec<usize>,
-        strides: Vec<usize>,
-        offset: usize,
-        backend: B,
-    ) -> Self {
-        Self {
-            storage: Arc::new(storage),
-            shape,
-            strides,
-            offset,
-            backend,
-        }
-    }
-
     /// Create a tensor from storage with given shape.
     ///
     /// The storage must be contiguous and have exactly `shape.iter().product()` elements.

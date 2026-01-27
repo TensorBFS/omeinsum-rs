@@ -9,14 +9,15 @@ use std::collections::HashMap;
 fn main() {
     println!("=== OMEinsum Basic Examples ===\n");
 
-    // Example 1: Standard matrix multiplication
+    // Example 1: Standard matrix multiplication using contract_binary
     println!("1. Standard Matrix Multiplication");
-    println!("   C[i,k] = Σ_j A[i,j] × B[j,k]\n");
+    println!("   C[i,k] = sum_j A[i,j] * B[j,k]\n");
 
     let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-    let c = a.gemm::<Standard<f32>>(&b);
+    // Use contract_binary for matrix multiplication: A[i,j] * B[j,k] -> C[i,k]
+    let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     println!("   A = [[1, 2], [3, 4]]");
     println!("   B = [[1, 2], [3, 4]]");
     println!("   C = {:?}\n", c.to_vec());
@@ -25,7 +26,7 @@ fn main() {
     println!("2. Tropical (MaxPlus) Matrix Multiplication");
     println!("   C[i,k] = max_j (A[i,j] + B[j,k])\n");
 
-    let c_tropical = a.gemm::<MaxPlus<f32>>(&b);
+    let c_tropical = a.contract_binary::<MaxPlus<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     println!("   Same A, B as above");
     println!("   C (tropical) = {:?}\n", c_tropical.to_vec());
 
@@ -33,7 +34,7 @@ fn main() {
     println!("3. MinPlus Matrix Multiplication (Shortest Paths)");
     println!("   C[i,k] = min_j (A[i,j] + B[j,k])\n");
 
-    let c_minplus = a.gemm::<MinPlus<f32>>(&b);
+    let c_minplus = a.contract_binary::<MinPlus<f32>>(&b, &[0, 1], &[1, 2], &[0, 2]);
     println!("   C (minplus) = {:?}\n", c_minplus.to_vec());
 
     // Example 4: Einsum with optimization

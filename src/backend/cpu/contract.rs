@@ -179,7 +179,6 @@ fn copy_strided_to_contiguous<T: Copy>(
     strides: &[usize],
 ) {
     let numel: usize = shape.iter().product();
-    let _dst_strides = compute_contiguous_strides(shape);
 
     for (i, dst_elem) in dst.iter_mut().enumerate().take(numel) {
         // Convert linear index to multi-index
@@ -209,7 +208,6 @@ fn permute_data<T: Copy + Default>(
     let mut result = vec![T::default(); numel];
 
     let old_strides = compute_contiguous_strides(shape);
-    let _new_strides = compute_contiguous_strides(&new_shape);
 
     for (new_idx, result_elem) in result.iter_mut().enumerate().take(numel) {
         // Convert new linear index to new multi-index

@@ -4,8 +4,6 @@
 //! - [`MinPlus<T>`]: `(min, +)` semiring for shortest path
 //! - [`MaxMul<T>`]: `(max, ×)` semiring for max probability
 
-#![cfg(feature = "tropical")]
-
 use super::semiring::{Algebra, Semiring};
 use super::Scalar;
 use num_traits::{Bounded, One, Zero};

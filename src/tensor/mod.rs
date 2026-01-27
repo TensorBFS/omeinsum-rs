@@ -470,8 +470,8 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
             // Convert flat index to multi-dimensional coordinates (column-major)
             let mut coords: Vec<usize> = vec![0; self.ndim()];
             let mut remaining = flat_idx;
-            for dim in 0..self.ndim() {
-                coords[dim] = remaining % self.shape[dim];
+            for (dim, coord) in coords.iter_mut().enumerate() {
+                *coord = remaining % self.shape[dim];
                 remaining /= self.shape[dim];
             }
 

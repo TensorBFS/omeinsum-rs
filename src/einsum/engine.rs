@@ -463,6 +463,7 @@ fn compute_input_position(
 /// to index label `1`. This automatically handles diagonal extraction because
 /// `compute_input_position` uses `idx_values[&idx]` - when the same index label
 /// appears multiple times in `ix`, those positions will use the same value.
+#[allow(clippy::needless_range_loop)]
 pub(crate) fn execute_unary_naive<A, T, B>(
     tensor: &Tensor<T, B>,
     ix: &[usize],

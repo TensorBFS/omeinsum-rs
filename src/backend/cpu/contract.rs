@@ -83,6 +83,7 @@ use crate::backend::Cpu;
 use crate::tensor::compute_contiguous_strides;
 
 /// Execute tensor contraction on CPU via reshape→GEMM→reshape.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn contract<A: Algebra>(
     cpu: &Cpu,
     a: &[A::Scalar],
@@ -180,7 +181,7 @@ fn copy_strided_to_contiguous<T: Copy>(
     let numel: usize = shape.iter().product();
     let _dst_strides = compute_contiguous_strides(shape);
 
-    for i in 0..numel {
+    for (i, dst_elem) in dst.iter_mut().enumerate().take(numel) {
         // Convert linear index to multi-index
         let mut remaining = i;
         let mut src_offset = 0;
@@ -189,7 +190,7 @@ fn copy_strided_to_contiguous<T: Copy>(
             remaining /= shape[dim];
             src_offset += coord * strides[dim];
         }
-        dst[i] = src[src_offset];
+        *dst_elem = src[src_offset];
     }
 }
 
@@ -210,7 +211,7 @@ fn permute_data<T: Copy + Default>(
     let old_strides = compute_contiguous_strides(shape);
     let _new_strides = compute_contiguous_strides(&new_shape);
 
-    for new_idx in 0..numel {
+    for (new_idx, result_elem) in result.iter_mut().enumerate().take(numel) {
         // Convert new linear index to new multi-index
         let mut remaining = new_idx;
         let mut new_coords = vec![0; shape.len()];
@@ -225,13 +226,14 @@ fn permute_data<T: Copy + Default>(
             old_idx += new_coords[new_dim] * old_strides[old_dim];
         }
 
-        result[new_idx] = data[old_idx];
+        *result_elem = data[old_idx];
     }
 
     result
 }
 
 /// Execute tensor contraction with argmax tracking.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn contract_with_argmax<A: Algebra<Index = u32>>(
     cpu: &Cpu,
     a: &[A::Scalar],

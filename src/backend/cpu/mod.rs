@@ -32,13 +32,13 @@ impl Cpu {
             let a_f32: &[f32] = unsafe { std::mem::transmute(a) };
             let b_f32: &[f32] = unsafe { std::mem::transmute(b) };
             let result = faer_gemm_f32(a_f32, m, k, b_f32, n);
-            return unsafe { std::mem::transmute(result) };
+            return unsafe { std::mem::transmute::<Vec<f32>, Vec<A::Scalar>>(result) };
         }
         if TypeId::of::<A>() == TypeId::of::<Standard<f64>>() {
             let a_f64: &[f64] = unsafe { std::mem::transmute(a) };
             let b_f64: &[f64] = unsafe { std::mem::transmute(b) };
             let result = faer_gemm_f64(a_f64, m, k, b_f64, n);
-            return unsafe { std::mem::transmute(result) };
+            return unsafe { std::mem::transmute::<Vec<f64>, Vec<A::Scalar>>(result) };
         }
 
         // Try to use optimized tropical-gemm if available

@@ -148,6 +148,7 @@ where
 ///
 /// For tropical algebras, gradients are routed through the argmax:
 /// only the "winning" element gets the gradient.
+#[allow(clippy::extra_unused_type_parameters)]
 fn tropical_backward<A, T, B>(
     grad_c: &Tensor<T, B>,
     a: &Tensor<T, B>,

@@ -5,9 +5,9 @@ This guide explains how to set up CUDA support for running GPU-accelerated tenso
 ## Requirements
 
 1. **NVIDIA GPU** with CUDA compute capability 3.5 or higher
-2. **NVIDIA Driver** version 525+ (for CUDA 12) or 545+ (for CUDA 13)
-3. **CUDA Toolkit** version 12.0 or higher
-4. **cuTENSOR Library** version 2.0 or higher
+2. **NVIDIA Driver** version 470+ (for CUDA 11) or 525+ (for CUDA 12)
+3. **CUDA Toolkit** version 11.0 or higher (CUDA 12 recommended)
+4. **cuTENSOR Library** version 2.0 or higher (REQUIRED - version 1.x will NOT work)
 
 ## Installation Steps
 
@@ -121,7 +121,7 @@ export LD_LIBRARY_PATH=~/.julia/artifacts/<cuda-hash>/lib:$CUTENSOR_PATH:$LD_LIB
 
 ## Known Limitations
 
-1. **Broadcast operations not supported**: Operations like `i -> ij` that add new dimensions are not supported on GPU (cuTENSOR limitation).
+1. **Broadcast via `einsum()` size inference not supported**: Operations like `i -> ij` that add new dimensions are not handled by the convenience `einsum()` helper on GPU. These broadcast/repeat patterns are supported on GPU when using `Einsum::new` with explicit size specification.
 
 2. **Multi-tensor operations**: Some complex multi-tensor einsum operations may produce different results between CPU and GPU due to different contraction orderings.
 
@@ -134,4 +134,4 @@ Run the CUDA test suite:
 cargo test --features cuda --test cuda
 ```
 
-Expected output: ~103 tests passing, 2 ignored (known limitations).
+Expected output: all CUDA tests pass, with only known limitations ignored (if any).

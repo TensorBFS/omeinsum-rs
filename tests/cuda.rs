@@ -17,6 +17,7 @@
 
 #![cfg(feature = "cuda")]
 
+use std::collections::HashMap;
 use omeinsum::backend::{Cpu, Cuda, CudaComplex, CudaStorage};
 
 // ============================================================================
@@ -1214,7 +1215,6 @@ fn test_cuda_manual_backward_matmul_complex64() {
 // `einsum()` API with the CUDA backend.
 
 use omeinsum::{einsum, Einsum, Standard, Tensor};
-use std::collections::HashMap;
 
 /// GPU test: Basic matrix multiplication using high-level einsum API.
 #[test]
@@ -1998,13 +1998,13 @@ fn test_consistency_matmul_f64() {
 }
 
 /// Test CPU-GPU consistency for batch matrix multiplication (bij,bjk->bik).
-/// NOTE: This test is ignored due to a known issue with batch dimension handling
-/// between CPU and GPU backends. The results differ in element ordering.
+/// NOTE: This test currently fails due to cuTENSOR batch dimension handling differences.
 #[test]
-#[ignore = "Known issue: batch matmul CPU-GPU result ordering differs"]
+#[ignore = "Batch matmul CPU-GPU mismatch - requires investigation of cuTENSOR batch handling"]
 fn test_consistency_batch_matmul() {
     let cuda = Cuda::new().unwrap();
 
+    // Standard test data
     let data_a: Vec<f64> = (1..=8).map(|x| x as f64).collect();
     let data_b: Vec<f64> = (1..=8).map(|x| x as f64).collect();
 
@@ -2121,11 +2121,9 @@ fn test_consistency_transpose() {
 }
 
 /// Test CPU-GPU consistency for 3-tensor chain (ij,jk,kl->il).
-/// NOTE: This test is ignored due to a known issue with 3-tensor chain handling
-/// between CPU and GPU backends. Multi-tensor operations may use different
-/// contraction orderings resulting in different intermediate representations.
+/// NOTE: This test is flaky due to non-determinism in multi-tensor einsum execution.
 #[test]
-#[ignore = "Known issue: 3-tensor chain CPU-GPU result ordering differs"]
+#[ignore = "Flaky: multi-tensor einsum shows non-deterministic behavior"]
 fn test_consistency_chain_3_tensors() {
     let cuda = Cuda::new().unwrap();
 

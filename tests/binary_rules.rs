@@ -169,17 +169,17 @@ fn test_binary_batched_matmul() {
 #[test]
 fn test_binary_batched_vector() {
     // Batched vector operations: bi,bi->b
-    // Note: The library uses row-major iteration order for this contraction pattern
+    // Column-major [2,3]: A[b,i] at position b + 2*i
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let b = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0], &[2, 3]);
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[0, 1]], &[0]);
 
     assert_eq!(c.shape(), &[2]);
-    // Library produces row-major style sums:
-    // Batch 0: 1+2+3 = 6 (first 3 elements)
-    // Batch 1: 4+5+6 = 15 (last 3 elements)
-    assert_eq!(c.to_vec(), vec![6.0, 15.0]);
+    // Column-major interpretation:
+    // Batch 0: A[0,0]+A[0,1]+A[0,2] = 1+3+5 = 9
+    // Batch 1: A[1,0]+A[1,1]+A[1,2] = 2+4+6 = 12
+    assert_eq!(c.to_vec(), vec![9.0, 12.0]);
 }
 
 #[test]

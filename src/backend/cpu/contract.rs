@@ -113,12 +113,14 @@ where
     let right_size = product_of_dims(&right, modes_b, shape_b);
     let contract_size = product_of_dims(&contracted, modes_a, shape_a);
 
-    // 4. Permute A to [batch, left, contracted]
-    let a_perm = compute_permutation(modes_a, &batch, &left, &contracted);
+    // 4. Permute A to [left, contracted, batch] - batch LAST for correct memory layout
+    // In column-major, the last dimension has the largest stride, so batch elements
+    // are contiguous blocks rather than interleaved.
+    let a_perm = compute_permutation(modes_a, &left, &contracted, &batch);
     let a_permuted = permute_data(&a_contig, shape_a, &a_perm);
 
-    // 5. Permute B to [batch, contracted, right]
-    let b_perm = compute_permutation(modes_b, &batch, &contracted, &right);
+    // 5. Permute B to [contracted, right, batch] - batch LAST
+    let b_perm = compute_permutation(modes_b, &contracted, &right, &batch);
     let b_permuted = permute_data(&b_contig, shape_b, &b_perm);
 
     // 6. Call GEMM
@@ -132,9 +134,10 @@ where
     };
 
     // 7. Permute result to output order
-    let current_order: Vec<i32> = batch.iter()
-        .chain(left.iter())
+    // Result is in [left, right, batch] order
+    let current_order: Vec<i32> = left.iter()
         .chain(right.iter())
+        .chain(batch.iter())
         .copied()
         .collect();
 
@@ -257,9 +260,10 @@ where
     let right_size = product_of_dims(&right, modes_b, shape_b);
     let contract_size = product_of_dims(&contracted, modes_a, shape_a);
 
-    let a_perm = compute_permutation(modes_a, &batch, &left, &contracted);
+    // Permute with batch LAST for correct memory layout
+    let a_perm = compute_permutation(modes_a, &left, &contracted, &batch);
     let a_permuted = permute_data(&a_contig, shape_a, &a_perm);
-    let b_perm = compute_permutation(modes_b, &batch, &contracted, &right);
+    let b_perm = compute_permutation(modes_b, &contracted, &right, &batch);
     let b_permuted = permute_data(&b_contig, shape_b, &b_perm);
 
     // Call GEMM with argmax
@@ -275,10 +279,10 @@ where
         )
     };
 
-    // Permute result
-    let current_order: Vec<i32> = batch.iter()
-        .chain(left.iter())
+    // Permute result - result is in [left, right, batch] order
+    let current_order: Vec<i32> = left.iter()
         .chain(right.iter())
+        .chain(batch.iter())
         .copied()
         .collect();
 

@@ -190,6 +190,7 @@ mod tests {
     fn test_contract_binary_batched() {
         // A[b,i,j] × B[b,j,k] → C[b,i,k]
         // 2 batches, 2x2 matrices
+        // Column-major layout: A[b,i,j] at position b + 2*i + 4*j
         let a =
             Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
         let b =
@@ -198,8 +199,11 @@ mod tests {
         let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3]);
 
         assert_eq!(c.shape(), &[2, 2, 2]);
-        // Batch 0: [[1,2],[3,4]] @ [[1,2],[3,4]] = [[7,10],[15,22]]
-        // Batch 1: [[5,6],[7,8]] @ [[1,0],[0,1]] = [[5,6],[7,8]]
-        assert_eq!(c.to_vec(), vec![7.0, 10.0, 15.0, 22.0, 5.0, 6.0, 7.0, 8.0]);
+        // In column-major [2,2,2]:
+        // Batch 0 of A: [[1,5],[3,7]], Batch 1 of A: [[2,6],[4,8]]
+        // Batch 0 of B: [[1,1],[3,0]], Batch 1 of B: [[2,0],[4,1]]
+        // Batch 0 result: [[16,1],[24,3]], Batch 1 result: [[28,6],[40,8]]
+        // Column-major output: [16, 28, 24, 40, 1, 6, 3, 8]
+        assert_eq!(c.to_vec(), vec![16.0, 28.0, 24.0, 40.0, 1.0, 6.0, 3.0, 8.0]);
     }
 }

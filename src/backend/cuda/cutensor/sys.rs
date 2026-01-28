@@ -2,6 +2,29 @@
 //!
 //! This module provides low-level bindings to NVIDIA's cuTENSOR library
 //! for high-performance tensor contractions on CUDA GPUs.
+//!
+//! # Version Requirements
+//!
+//! **cuTENSOR 2.0+ is REQUIRED.** The API changed significantly between
+//! cuTENSOR 1.x and 2.x. This crate uses the cuTENSOR 2.x API with functions like:
+//! - `cutensorCreate` (not `cutensorInit`)
+//! - `cutensorContract` (not `cutensorContraction`)
+//! - `cutensorCreatePlan` / `cutensorCreatePlanPreference`
+//!
+//! If you see linker errors about undefined symbols like `cutensorContract`,
+//! `cutensorCreatePlan`, or `CUTENSOR_COMPUTE_DESC_32F`, you likely have
+//! cuTENSOR 1.x installed instead of 2.x.
+//!
+//! ## Installation
+//!
+//! For CUDA 12:
+//! ```bash
+//! conda install -c nvidia cutensor-cu12
+//! ```
+//!
+//! Or download from: <https://developer.nvidia.com/cutensor-downloads>
+//!
+//! Make sure to set `CUTENSOR_PATH` to the directory containing `libcutensor.so`.
 
 #![allow(non_camel_case_types)]
 

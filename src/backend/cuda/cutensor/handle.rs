@@ -26,6 +26,10 @@ impl Handle {
     /// # Returns
     /// * `Ok(Handle)` on success
     /// * `Err(CutensorError)` if handle creation fails
+    ///
+    /// # Version Requirements
+    /// cuTENSOR 2.0+ is required. Version 1.x uses a different API and will fail
+    /// at link time with undefined symbol errors for `cutensorContract`, etc.
     pub fn new(device: Arc<CudaDevice>) -> Result<Self, CutensorError> {
         let mut raw = std::ptr::null_mut();
         check(unsafe { cutensorCreate(&mut raw) })?;

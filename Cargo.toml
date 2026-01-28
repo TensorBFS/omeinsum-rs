@@ -9,6 +9,11 @@ repository = "https://github.com/TensorBFS/omeinsum-rs"
 keywords = ["einsum", "tensor", "tropical", "autodiff", "contraction"]
 categories = ["science", "mathematics"]
 
+# Native library requirements (for CUDA feature)
+# cuTENSOR is linked via build.rs when cuda feature is enabled
+[package.metadata.native-deps]
+cutensor = { version = ">=2.0.0", note = "Required for cuda feature. Version 1.x uses incompatible API." }
+
 [dependencies]
 # Core
 num-traits = "0.2"
@@ -48,7 +53,7 @@ tropical-kernels = ["tropical"]
 # Parallel execution
 parallel = ["rayon"]
 
-# CUDA backend
+# CUDA backend (requires cuTENSOR 2.0+, see package.metadata.native-deps)
 cuda = ["dep:cudarc"]
 
 # Convenience: all features

@@ -1448,10 +1448,163 @@ fn test_cuda_einsum_trace() {
     assert_eq!(trace.to_vec(), vec![5.0]);
 }
 
-// Note: Complex einsum via high-level API is tested via the low-level
-// contract_cutensor tests above (test_matmul_complex64 etc.).
-// The high-level einsum API with CudaComplex requires CudaComplex: Scalar,
-// which is not currently implemented since CudaComplex is a GPU-specific wrapper.
+// ============================================================================
+// Complex Einsum Tests (High-Level API)
+// Now that CudaComplex implements Scalar, we can use the high-level einsum API.
+// ============================================================================
+
+/// GPU test: Complex matrix multiplication via high-level einsum.
+#[test]
+fn test_cuda_einsum_complex_matmul() {
+    let cuda = Cuda::new().unwrap();
+
+    // A = [[1+i, 2], [3, 4-i]] in column-major
+    let a_data = vec![
+        CudaComplex::new(1.0, 1.0),
+        CudaComplex::new(3.0, 0.0),
+        CudaComplex::new(2.0, 0.0),
+        CudaComplex::new(4.0, -1.0),
+    ];
+    // B = identity matrix
+    let b_data = vec![
+        CudaComplex::new(1.0, 0.0),
+        CudaComplex::new(0.0, 0.0),
+        CudaComplex::new(0.0, 0.0),
+        CudaComplex::new(1.0, 0.0),
+    ];
+
+    let a = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&a_data, &[2, 2], cuda.clone());
+    let b = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&b_data, &[2, 2], cuda);
+
+    // C = A @ I = A
+    let c = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    assert_eq!(c.shape(), &[2, 2]);
+    let result = c.to_vec();
+    // Result should equal A since B is identity
+    for (i, (r, a)) in result.iter().zip(a_data.iter()).enumerate() {
+        assert!(
+            (r.re() - a.re()).abs() < 1e-10 && (r.im() - a.im()).abs() < 1e-10,
+            "Mismatch at {}: got ({}, {}), expected ({}, {})",
+            i, r.re(), r.im(), a.re(), a.im()
+        );
+    }
+}
+
+/// GPU test: Complex trace via high-level einsum.
+#[test]
+fn test_cuda_einsum_complex_trace() {
+    let cuda = Cuda::new().unwrap();
+
+    // A = [[1+i, 2], [3, 4-i]] in column-major
+    let a_data = vec![
+        CudaComplex::new(1.0, 1.0),  // A[0,0]
+        CudaComplex::new(3.0, 0.0),  // A[1,0]
+        CudaComplex::new(2.0, 0.0),  // A[0,1]
+        CudaComplex::new(4.0, -1.0), // A[1,1]
+    ];
+
+    let a = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&a_data, &[2, 2], cuda);
+
+    // trace = A[0,0] + A[1,1] = (1+i) + (4-i) = 5
+    let trace = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a], &[&[0, 0]], &[]);
+
+    assert_eq!(trace.shape(), &[]);
+    let result = trace.to_vec();
+    assert_eq!(result.len(), 1);
+    assert!((result[0].re() - 5.0).abs() < 1e-10);
+    assert!((result[0].im() - 0.0).abs() < 1e-10);
+}
+
+/// GPU test: Complex inner product via high-level einsum.
+#[test]
+fn test_cuda_einsum_complex_inner_product() {
+    let cuda = Cuda::new().unwrap();
+
+    let a_data = vec![
+        CudaComplex::new(1.0, 1.0),
+        CudaComplex::new(2.0, -1.0),
+    ];
+    let b_data = vec![
+        CudaComplex::new(1.0, -1.0),
+        CudaComplex::new(0.0, 1.0),
+    ];
+
+    let a = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&a_data, &[2], cuda.clone());
+    let b = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&b_data, &[2], cuda);
+
+    // inner = a[0]*b[0] + a[1]*b[1]
+    // = (1+i)(1-i) + (2-i)(i)
+    // = (1 + 1) + (2i - i²) = 2 + (2i + 1) = 3 + 2i
+    let inner = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a, &b], &[&[0], &[0]], &[]);
+
+    assert_eq!(inner.shape(), &[]);
+    let result = inner.to_vec();
+    assert_eq!(result.len(), 1);
+    assert!((result[0].re() - 3.0).abs() < 1e-10, "re = {}", result[0].re());
+    assert!((result[0].im() - 2.0).abs() < 1e-10, "im = {}", result[0].im());
+}
+
+/// GPU test: Complex transpose via high-level einsum.
+#[test]
+fn test_cuda_einsum_complex_transpose() {
+    let cuda = Cuda::new().unwrap();
+
+    // A = [[1+i, 3], [2, 4-i]] in column-major: [1+i, 2, 3, 4-i]
+    let a_data = vec![
+        CudaComplex::new(1.0, 1.0),
+        CudaComplex::new(2.0, 0.0),
+        CudaComplex::new(3.0, 0.0),
+        CudaComplex::new(4.0, -1.0),
+    ];
+
+    let a = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&a_data, &[2, 2], cuda);
+
+    // A^T in column-major: [1+i, 3, 2, 4-i]
+    let at = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a], &[&[0, 1]], &[1, 0]);
+
+    assert_eq!(at.shape(), &[2, 2]);
+    let result = at.to_vec();
+    // Expected: [[1+i, 2], [3, 4-i]] -> [[1+i, 3], [2, 4-i]] in col-major: [1+i, 3, 2, 4-i]
+    assert!((result[0].re() - 1.0).abs() < 1e-10 && (result[0].im() - 1.0).abs() < 1e-10);
+    assert!((result[1].re() - 3.0).abs() < 1e-10 && (result[1].im() - 0.0).abs() < 1e-10);
+    assert!((result[2].re() - 2.0).abs() < 1e-10 && (result[2].im() - 0.0).abs() < 1e-10);
+    assert!((result[3].re() - 4.0).abs() < 1e-10 && (result[3].im() - (-1.0)).abs() < 1e-10);
+}
+
+/// GPU test: Complex outer product via high-level einsum.
+#[test]
+fn test_cuda_einsum_complex_outer_product() {
+    let cuda = Cuda::new().unwrap();
+
+    let a_data = vec![
+        CudaComplex::new(1.0, 1.0),
+        CudaComplex::new(2.0, 0.0),
+    ];
+    let b_data = vec![
+        CudaComplex::new(0.0, 1.0),
+        CudaComplex::new(1.0, -1.0),
+    ];
+
+    let a = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&a_data, &[2], cuda.clone());
+    let b = Tensor::<CudaComplex<f64>, Cuda>::from_data_with_backend(&b_data, &[2], cuda);
+
+    // outer[i,j] = a[i] * b[j]
+    let outer = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a, &b], &[&[0], &[1]], &[0, 1]);
+
+    assert_eq!(outer.shape(), &[2, 2]);
+    let result = outer.to_vec();
+
+    // Expected in column-major:
+    // [0,0] = (1+i)(i) = i + i² = -1 + i
+    // [1,0] = (2)(i) = 2i
+    // [0,1] = (1+i)(1-i) = 1 - i² = 2
+    // [1,1] = (2)(1-i) = 2 - 2i
+    assert!((result[0].re() - (-1.0)).abs() < 1e-10 && (result[0].im() - 1.0).abs() < 1e-10);
+    assert!((result[1].re() - 0.0).abs() < 1e-10 && (result[1].im() - 2.0).abs() < 1e-10);
+    assert!((result[2].re() - 2.0).abs() < 1e-10 && (result[2].im() - 0.0).abs() < 1e-10);
+    assert!((result[3].re() - 2.0).abs() < 1e-10 && (result[3].im() - (-2.0)).abs() < 1e-10);
+}
 
 // ============================================================================
 // GPU Unary Operation Tests

@@ -201,8 +201,12 @@ pub trait Backend: Clone + Send + Sync + 'static {
 // CPU supports all Scalar types
 impl<T: Scalar> BackendScalar<crate::backend::Cpu> for T {}
 
-// CUDA supports f32 and f64 (complex is handled internally via CudaComplex)
+// CUDA supports f32, f64, and CudaComplex types
 #[cfg(feature = "cuda")]
 impl BackendScalar<crate::backend::Cuda> for f32 {}
 #[cfg(feature = "cuda")]
 impl BackendScalar<crate::backend::Cuda> for f64 {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for crate::backend::CudaComplex<f32> {}
+#[cfg(feature = "cuda")]
+impl BackendScalar<crate::backend::Cuda> for crate::backend::CudaComplex<f64> {}

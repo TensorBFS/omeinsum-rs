@@ -122,6 +122,12 @@ impl num_traits::One for CudaComplex<f32> {
     }
 }
 
+impl std::ops::AddAssign for CudaComplex<f32> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
 // Arithmetic for CudaComplex<f64>
 impl std::ops::Add for CudaComplex<f64> {
     type Output = Self;
@@ -151,6 +157,27 @@ impl num_traits::One for CudaComplex<f64> {
         CudaComplex(Complex::new(1.0, 0.0))
     }
 }
+
+impl std::ops::AddAssign for CudaComplex<f64> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+// SAFETY: CudaComplex<f32> is repr(transparent) over Complex<f32>,
+// which is repr(C) with two f32 fields. This is a valid Pod type.
+unsafe impl bytemuck::Zeroable for CudaComplex<f32> {}
+unsafe impl bytemuck::Pod for CudaComplex<f32> {}
+
+// SAFETY: CudaComplex<f64> is repr(transparent) over Complex<f64>,
+// which is repr(C) with two f64 fields. This is a valid Pod type.
+unsafe impl bytemuck::Zeroable for CudaComplex<f64> {}
+unsafe impl bytemuck::Pod for CudaComplex<f64> {}
+
+// Scalar implementations for CudaComplex
+// This enables the high-level einsum API to work with complex numbers on GPU.
+impl Scalar for CudaComplex<f32> {}
+impl Scalar for CudaComplex<f64> {}
 
 // CutensorType implementations
 impl CutensorType for CudaComplex<f32> {
@@ -447,6 +474,14 @@ impl<T: Scalar> Storage<T> for CudaStorage<T> {
             let slice_u32: &cudarc::driver::CudaSlice<u32> = unsafe { std::mem::transmute(self.slice()) };
             let result = self.device().dtoh_sync_copy(slice_u32).expect("Failed to download");
             unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f32>>() {
+            let slice_c32: &cudarc::driver::CudaSlice<CudaComplex<f32>> = unsafe { std::mem::transmute(self.slice()) };
+            let result = self.device().dtoh_sync_copy(slice_c32).expect("Failed to download");
+            unsafe { std::mem::transmute(result) }
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f64>>() {
+            let slice_c64: &cudarc::driver::CudaSlice<CudaComplex<f64>> = unsafe { std::mem::transmute(self.slice()) };
+            let result = self.device().dtoh_sync_copy(slice_c64).expect("Failed to download");
+            unsafe { std::mem::transmute(result) }
         } else {
             panic!("CudaStorage::to_vec not supported for type {:?}", std::any::type_name::<T>());
         }
@@ -474,6 +509,14 @@ impl<T: Scalar> Clone for CudaStorage<T> {
             CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
         } else if TypeId::of::<T>() == TypeId::of::<u32>() {
             let data: Vec<u32> = unsafe { std::mem::transmute(self.to_vec()) };
+            let new_slice = self.device().htod_sync_copy(&data).expect("Failed to clone");
+            CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f32>>() {
+            let data: Vec<CudaComplex<f32>> = unsafe { std::mem::transmute(self.to_vec()) };
+            let new_slice = self.device().htod_sync_copy(&data).expect("Failed to clone");
+            CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f64>>() {
+            let data: Vec<CudaComplex<f64>> = unsafe { std::mem::transmute(self.to_vec()) };
             let new_slice = self.device().htod_sync_copy(&data).expect("Failed to clone");
             CudaStorage::new(unsafe { std::mem::transmute(new_slice) }, self.device().clone())
         } else {
@@ -508,6 +551,12 @@ impl Backend for Cuda {
         } else if TypeId::of::<T>() == TypeId::of::<u32>() {
             let slice = self.device.alloc_zeros::<u32>(len).expect("Failed to allocate");
             CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f32>>() {
+            let slice = self.device.alloc_zeros::<CudaComplex<f32>>(len).expect("Failed to allocate");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f64>>() {
+            let slice = self.device.alloc_zeros::<CudaComplex<f64>>(len).expect("Failed to allocate");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
         } else {
             panic!("CUDA alloc not supported for type {:?}", std::any::type_name::<T>());
         }
@@ -526,6 +575,14 @@ impl Backend for Cuda {
         } else if TypeId::of::<T>() == TypeId::of::<u32>() {
             let data_u32: &[u32] = unsafe { std::mem::transmute(data) };
             let slice = self.device.htod_sync_copy(data_u32).expect("Failed to copy");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f32>>() {
+            let data_c32: &[CudaComplex<f32>] = unsafe { std::mem::transmute(data) };
+            let slice = self.device.htod_sync_copy(data_c32).expect("Failed to copy");
+            CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
+        } else if TypeId::of::<T>() == TypeId::of::<CudaComplex<f64>>() {
+            let data_c64: &[CudaComplex<f64>] = unsafe { std::mem::transmute(data) };
+            let slice = self.device.htod_sync_copy(data_c64).expect("Failed to copy");
             CudaStorage::new(unsafe { std::mem::transmute(slice) }, self.device.clone())
         } else {
             panic!("CUDA from_slice not supported for type {:?}", std::any::type_name::<T>());

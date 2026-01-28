@@ -256,7 +256,7 @@ fn test_matrix_vector_contraction() {
 #[test]
 fn test_batch_matrix_multiplication() {
     // ein"bij,bjk -> bik"(a, b) = batched matmul
-    // Batch of 2, each 2x2 matrix
+    // Column-major [2,2,2]: element [b,i,j] at position b + 2*i + 4*j
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
     let b = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
 
@@ -264,10 +264,12 @@ fn test_batch_matrix_multiplication() {
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3]);
 
     assert_eq!(c.shape(), &[2, 2, 2]);
-    // Batch 0: [[1,3],[2,4]] @ I = [[1,3],[2,4]] -> [1,2,3,4]
-    // Batch 1: [[5,7],[6,8]] @ 2I = [[10,14],[12,16]] -> [10,12,14,16]
-    // Combined in col-major: [1, 2, 3, 4, 10, 12, 14, 16]
-    assert_eq!(c.to_vec(), vec![1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0]);
+    // Column-major interpretation:
+    // A batch 0: [[1,5],[3,7]], A batch 1: [[2,6],[4,8]]
+    // B batch 0: [[1,2],[0,0]], B batch 1: [[0,0],[1,2]]
+    // C batch 0: [[1,2],[3,6]], C batch 1: [[6,12],[8,16]]
+    // Column-major result: [1, 6, 3, 8, 2, 12, 6, 16]
+    assert_eq!(c.to_vec(), vec![1.0, 6.0, 3.0, 8.0, 2.0, 12.0, 6.0, 16.0]);
 }
 
 // ============================================================================

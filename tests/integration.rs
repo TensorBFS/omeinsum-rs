@@ -86,17 +86,20 @@ fn test_tensor_contraction_3d() {
 #[test]
 fn test_batch_matmul() {
     // Batch matmul: A[b,i,j] x B[b,j,k] -> C[b,i,k]
+    // Column-major [2,2,2]: element [b,i,j] at position b + 2*i + 4*j
     let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
     let b = Tensor::<f32, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
 
     let c = einsum::<Standard<f32>, _, _>(&[&a, &b], &[&[0, 1, 2], &[0, 2, 3]], &[0, 1, 3]);
 
     assert_eq!(c.shape(), &[2, 2, 2]);
-    // Batch 0: [[1,2],[3,4]] @ I = [[1,2],[3,4]]
-    // Batch 1: [[5,6],[7,8]] @ 2I = [[10,12],[14,16]]
+    // Column-major interpretation:
+    // A batch 0: [[1,5],[3,7]], A batch 1: [[2,6],[4,8]]
+    // B batch 0: [[1,2],[0,0]], B batch 1: [[0,0],[1,2]]
+    // C batch 0: [[1,2],[3,6]], C batch 1: [[6,12],[8,16]]
+    // Column-major result: [1, 6, 3, 8, 2, 12, 6, 16]
     let c_vec = c.to_vec();
-    assert_eq!(c_vec[0..4], [1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(c_vec[4..8], [10.0, 12.0, 14.0, 16.0]);
+    assert_eq!(c_vec, vec![1.0, 6.0, 3.0, 8.0, 2.0, 12.0, 6.0, 16.0]);
 }
 
 #[test]

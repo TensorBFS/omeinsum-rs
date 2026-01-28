@@ -1998,9 +1998,7 @@ fn test_consistency_matmul_f64() {
 }
 
 /// Test CPU-GPU consistency for batch matrix multiplication (bij,bjk->bik).
-/// NOTE: This test currently fails due to cuTENSOR batch dimension handling differences.
 #[test]
-#[ignore = "Batch matmul CPU-GPU mismatch - requires investigation of cuTENSOR batch handling"]
 fn test_consistency_batch_matmul() {
     let cuda = Cuda::new().unwrap();
 

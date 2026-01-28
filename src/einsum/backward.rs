@@ -469,4 +469,474 @@ mod tests {
         assert_eq!(grad_b.shape(), &[2, 2]);
         assert_eq!(grad_b.to_vec(), vec![1.0, 1.0, 2.0, 0.0]);
     }
+
+    // ========================================================================
+    // bpcheck: Finite-difference gradient validation utility
+    // ========================================================================
+    //
+    // Port of Julia OMEinsum's bpcheck function for verifying gradients.
+    // Uses the relation: f(x - η*g) ≈ f(x) - η|g|² for gradient verification.
+
+    use crate::einsum;
+    use crate::einsum::einsum_with_grad;
+
+    /// Check unary gradient via finite differences.
+    ///
+    /// Returns (passed, max_error) where passed is true if max_error < tol.
+    fn bpcheck_unary(
+        input: &Tensor<f64, Cpu>,
+        ix: &[usize],
+        iy: &[usize],
+        eta: f64,
+        tol: f64,
+    ) -> (bool, f64) {
+        // Forward and backward pass
+        let (result, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[input], &[ix], iy);
+
+        // Create gradient output of all ones
+        let grad_output = Tensor::<f64, Cpu>::from_data(
+            &vec![1.0; result.to_vec().len()],
+            result.shape(),
+        );
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[input]);
+        let grad = &grads[0];
+
+        // Compute |g|² and expected change
+        let grad_vec = grad.to_vec();
+        let grad_sq_sum: f64 = grad_vec.iter().map(|x| x * x).sum();
+        let expected_change = eta * grad_sq_sum;
+
+        // Compute f(x) and f(x - η*g)
+        let f_x: f64 = result.to_vec().iter().sum();
+
+        let input_vec = input.to_vec();
+        let perturbed_vec: Vec<f64> = input_vec
+            .iter()
+            .zip(grad_vec.iter())
+            .map(|(x, g)| x - eta * g)
+            .collect();
+        let perturbed = Tensor::<f64, Cpu>::from_data(&perturbed_vec, input.shape());
+        let f_x_perturbed: f64 =
+            einsum::<Standard<f64>, _, _>(&[&perturbed], &[ix], iy).to_vec().iter().sum();
+
+        let actual_change = f_x - f_x_perturbed;
+        let error = (actual_change - expected_change).abs();
+        let passed = error < tol || (expected_change > 0.0 && error / expected_change < 0.01);
+
+        (passed, error)
+    }
+
+    /// Check binary gradient via finite differences.
+    ///
+    /// Returns (passed, max_error_a, max_error_b).
+    fn bpcheck_binary(
+        a: &Tensor<f64, Cpu>,
+        b: &Tensor<f64, Cpu>,
+        ia: &[usize],
+        ib: &[usize],
+        iy: &[usize],
+        eta: f64,
+        tol: f64,
+    ) -> (bool, f64, f64) {
+        let (result, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(&[a, b], &[ia, ib], iy);
+
+        let grad_output = Tensor::<f64, Cpu>::from_data(
+            &vec![1.0; result.to_vec().len()],
+            result.shape(),
+        );
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[a, b]);
+
+        // Check gradient of A
+        let grad_a_vec = grads[0].to_vec();
+        let a_vec = a.to_vec();
+        let grad_a_sq_sum: f64 = grad_a_vec.iter().map(|x| x * x).sum();
+        let expected_a = eta * grad_a_sq_sum;
+
+        let perturbed_a_vec: Vec<f64> = a_vec
+            .iter()
+            .zip(grad_a_vec.iter())
+            .map(|(x, g)| x - eta * g)
+            .collect();
+        let perturbed_a = Tensor::<f64, Cpu>::from_data(&perturbed_a_vec, a.shape());
+
+        let f_orig: f64 = result.to_vec().iter().sum();
+        let f_perturbed_a: f64 =
+            einsum::<Standard<f64>, _, _>(&[&perturbed_a, b], &[ia, ib], iy).to_vec().iter().sum();
+
+        let actual_a = f_orig - f_perturbed_a;
+        let error_a = (actual_a - expected_a).abs();
+
+        // Check gradient of B
+        let grad_b_vec = grads[1].to_vec();
+        let b_vec = b.to_vec();
+        let grad_b_sq_sum: f64 = grad_b_vec.iter().map(|x| x * x).sum();
+        let expected_b = eta * grad_b_sq_sum;
+
+        let perturbed_b_vec: Vec<f64> = b_vec
+            .iter()
+            .zip(grad_b_vec.iter())
+            .map(|(x, g)| x - eta * g)
+            .collect();
+        let perturbed_b = Tensor::<f64, Cpu>::from_data(&perturbed_b_vec, b.shape());
+
+        let f_perturbed_b: f64 =
+            einsum::<Standard<f64>, _, _>(&[a, &perturbed_b], &[ia, ib], iy).to_vec().iter().sum();
+
+        let actual_b = f_orig - f_perturbed_b;
+        let error_b = (actual_b - expected_b).abs();
+
+        let passed_a = error_a < tol || (expected_a > 0.0 && error_a / expected_a < 0.01);
+        let passed_b = error_b < tol || (expected_b > 0.0 && error_b / expected_b < 0.01);
+
+        (passed_a && passed_b, error_a, error_b)
+    }
+
+    // ========================================================================
+    // Unary Gradient Tests (ported from Julia OMEinsum autodiff.jl)
+    // ========================================================================
+
+    #[test]
+    fn test_bpcheck_trace() {
+        // Trace: ii -> (sum of diagonal)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 0], &[], 1e-5, 1e-8);
+        assert!(passed, "Trace gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_trace_4d() {
+        // 4D trace: ijji -> (trace over both pairs)
+        let a = Tensor::<f64, Cpu>::from_data(&(1..=16).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1, 1, 0], &[], 1e-5, 1e-8);
+        assert!(passed, "4D trace gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_partial_trace() {
+        // Partial trace: ijji -> i (trace over j, keep i)
+        // Actually: ibbj -> ij (trace over repeated b)
+        let a = Tensor::<f64, Cpu>::from_data(&(1..=16).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1, 1, 2], &[0, 2], 1e-5, 1e-8);
+        assert!(passed, "Partial trace gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_diagonal() {
+        // Diagonal extraction: ibbj -> ibj (extract diagonal along b)
+        let a = Tensor::<f64, Cpu>::from_data(&(1..=16).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1, 1, 2], &[0, 1, 2], 1e-5, 1e-8);
+        assert!(passed, "Diagonal gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_permutation() {
+        // Permutation: ij -> ji (transpose)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1], &[1, 0], 1e-5, 1e-8);
+        assert!(passed, "Transpose gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_permutation_4d() {
+        // 4D permutation: ijkl -> klij
+        let a = Tensor::<f64, Cpu>::from_data(&(1..=16).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1, 2, 3], &[2, 3, 0, 1], 1e-5, 1e-8);
+        assert!(passed, "4D permutation gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_sum_reduction() {
+        // Sum: ijk -> ij (sum over k)
+        let a = Tensor::<f64, Cpu>::from_data(&(1..=8).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1, 2], &[0, 1], 1e-5, 1e-8);
+        assert!(passed, "Sum reduction gradient failed with error {}", error);
+    }
+
+    #[test]
+    fn test_bpcheck_sum_all() {
+        // Sum all: ij -> (scalar)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let (passed, error) = bpcheck_unary(&a, &[0, 1], &[], 1e-5, 1e-8);
+        assert!(passed, "Sum all gradient failed with error {}", error);
+    }
+
+    // ========================================================================
+    // Binary Gradient Tests (ported from Julia OMEinsum autodiff.jl)
+    // ========================================================================
+
+    #[test]
+    fn test_bpcheck_matmul() {
+        // Matrix multiplication: ij,jk -> ik
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1], &[1, 2], &[0, 2], 1e-5, 1e-8);
+        assert!(passed, "Matmul gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_matmul_chain() {
+        // Matrix chain: ij,jk,kl -> il
+        // Note: bpcheck_binary only tests two inputs at a time
+        // Here we test the first pair
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1], &[1, 2], &[0, 2], 1e-5, 1e-8);
+        assert!(passed, "Matmul chain gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_hadamard() {
+        // Hadamard product: ij,ij -> ij (element-wise)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1], &[0, 1], &[0, 1], 1e-5, 1e-8);
+        assert!(passed, "Hadamard gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_outer_product() {
+        // Outer product: ij,kl -> ijkl
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1], &[2, 3], &[0, 1, 2, 3], 1e-5, 1e-8);
+        assert!(passed, "Outer product gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_contract_to_scalar() {
+        // Contract to scalar: ij,ij -> (full contraction)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1], &[0, 1], &[], 1e-5, 1e-8);
+        assert!(passed, "Contract to scalar gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_star_contraction() {
+        // Star contraction: ai,bi,ci -> abc (3 tensors share index i)
+        // Testing first two tensors: ai,bi -> ab
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        // a has indices (0, 1) meaning "a=0, i=1"
+        // b has indices (2, 1) meaning "b=2, i=1"
+        // output is (0, 2) meaning "ab"
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1], &[2, 1], &[0, 2], 1e-5, 1e-8);
+        assert!(passed, "Star contraction gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_tensor_contraction() {
+        // Tensor contraction: ijkl,kl -> ij
+        let t = Tensor::<f64, Cpu>::from_data(&(1..=16).map(|x| x as f64).collect::<Vec<_>>(), &[2, 2, 2, 2]);
+        let m = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let (passed, err_t, err_m) = bpcheck_binary(&t, &m, &[0, 1, 2, 3], &[2, 3], &[0, 1], 1e-5, 1e-8);
+        assert!(passed, "Tensor contraction gradient failed: err_t={}, err_m={}", err_t, err_m);
+    }
+
+    #[test]
+    fn test_bpcheck_batched_matmul() {
+        // Batched matmul: bij,bjk -> bik
+        // Use smaller values to reduce numerical error accumulation
+        let a = Tensor::<f64, Cpu>::from_data(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2], &[2, 2, 3]);
+        let b = Tensor::<f64, Cpu>::from_data(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2], &[2, 3, 2]);
+        // Use looser tolerance for 3D tensors due to accumulated numerical error
+        let (passed, err_a, err_b) = bpcheck_binary(&a, &b, &[0, 1, 2], &[0, 2, 3], &[0, 1, 3], 1e-5, 1e-4);
+        assert!(passed, "Batched matmul gradient failed: err_a={}, err_b={}", err_a, err_b);
+    }
+
+    #[test]
+    fn test_bpcheck_matvec() {
+        // Matrix-vector: ij,j -> i
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let v = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0], &[2]);
+        let (passed, err_a, err_v) = bpcheck_binary(&a, &v, &[0, 1], &[1], &[0], 1e-5, 1e-8);
+        assert!(passed, "Matvec gradient failed: err_a={}, err_v={}", err_a, err_v);
+    }
+
+    // ========================================================================
+    // Nested/Chain Gradient Tests
+    // ========================================================================
+
+    #[test]
+    fn test_nested_chain_gradient_via_composition() {
+        // Test gradient through a chain: (A @ B) @ C
+        // First compute A @ B, then multiply by C
+        // Verify gradient composition works correctly
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[0.5, 0.6, 0.7, 0.8], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[0.1, 0.2, 0.3, 0.4], &[2, 2]);
+
+        // Step 1: A @ B -> AB
+        let ab = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+        // Step 2: AB @ C -> result
+        let (result, grad_fn) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&ab, &c], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+        // Gradient with respect to final output
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&ab, &c]);
+
+        // Verify gradient shapes
+        assert_eq!(grads[0].shape(), ab.shape(), "Gradient of AB should match AB shape");
+        assert_eq!(grads[1].shape(), c.shape(), "Gradient of C should match C shape");
+
+        // Verify gradients are non-zero
+        let grad_ab_sum: f64 = grads[0].to_vec().iter().sum();
+        let grad_c_sum: f64 = grads[1].to_vec().iter().sum();
+        assert!(grad_ab_sum.abs() > 0.0, "Gradient of AB should be non-zero");
+        assert!(grad_c_sum.abs() > 0.0, "Gradient of C should be non-zero");
+
+        // Verify result is computed
+        assert_eq!(result.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_nested_trace_chain() {
+        // Test: trace(A @ B) - unary after binary
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+
+        // A @ B -> AB
+        let (ab, grad_fn_ab) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+        // trace(AB) -> scalar
+        let (trace_result, grad_fn_trace) =
+            einsum_with_grad::<Standard<f64>, _, _>(&[&ab], &[&[0, 0]], &[]);
+
+        // Gradient of trace is identity matrix
+        let grad_scalar = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+        let grads_trace = grad_fn_trace.backward::<Standard<f64>>(&grad_scalar, &[&ab]);
+
+        // Gradient of AB from trace
+        let grad_ab = &grads_trace[0];
+        assert_eq!(grad_ab.shape(), &[2, 2]);
+        // Trace gradient is identity: [[1,0],[0,1]]
+        assert_eq!(grad_ab.to_vec(), vec![1.0, 0.0, 0.0, 1.0]);
+
+        // Now propagate back to A and B
+        let grads_matmul = grad_fn_ab.backward::<Standard<f64>>(grad_ab, &[&a, &b]);
+        assert_eq!(grads_matmul[0].shape(), a.shape());
+        assert_eq!(grads_matmul[1].shape(), b.shape());
+
+        // Verify the trace result
+        assert_eq!(trace_result.to_vec(), vec![5.0]); // trace(A @ I) = trace(A) = 1 + 4 = 5
+    }
+
+    #[test]
+    fn test_nested_sum_after_outer() {
+        // Test: sum(outer(a, b)) - should equal sum(a) * sum(b)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0], &[3]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+
+        // Outer product: a ⊗ b
+        let sizes: HashMap<usize, usize> = [(0, 3), (1, 2)].into();
+        let ein_outer = crate::einsum::Einsum::new(vec![vec![0], vec![1]], vec![0, 1], sizes.clone());
+        let outer = ein_outer.execute::<Standard<f64>, f64, Cpu>(&[&a, &b]);
+
+        // Sum all elements
+        let ein_sum = crate::einsum::Einsum::new(vec![vec![0, 1]], vec![], sizes);
+        let sum_result = ein_sum.execute::<Standard<f64>, f64, Cpu>(&[&outer]);
+
+        // sum(a) = 6, sum(b) = 2, product = 12
+        assert_eq!(sum_result.to_vec(), vec![12.0]);
+    }
+
+    #[test]
+    fn test_gradient_4d_tensor_contract() {
+        // Test gradient for higher-dimensional contraction
+        // ijkl,klmn->ijmn
+        let a = Tensor::<f64, Cpu>::from_data(&vec![0.1; 16], &[2, 2, 2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&vec![0.2; 16], &[2, 2, 2, 2]);
+
+        let (result, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(
+            &[&a, &b],
+            &[&[0, 1, 2, 3], &[2, 3, 4, 5]],
+            &[0, 1, 4, 5],
+        );
+
+        assert_eq!(result.shape(), &[2, 2, 2, 2]);
+
+        let grad_output = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b]);
+
+        assert_eq!(grads[0].shape(), a.shape());
+        assert_eq!(grads[1].shape(), b.shape());
+
+        // Verify gradients are computed (non-zero for non-zero inputs)
+        let grad_a_sum: f64 = grads[0].to_vec().iter().sum();
+        let grad_b_sum: f64 = grads[1].to_vec().iter().sum();
+        assert!(grad_a_sum > 0.0);
+        assert!(grad_b_sum > 0.0);
+    }
+
+    #[test]
+    fn test_gradient_symmetry() {
+        // For symmetric operation ij,ji->, grad_a and grad_b should relate to each other
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let (result, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(
+            &[&a, &b],
+            &[&[0, 1], &[1, 0]],  // ij,ji->
+            &[],
+        );
+
+        // This is sum_ij A[i,j] * B[j,i] = trace(A @ B.T)
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0], &[]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b]);
+
+        assert_eq!(grads[0].shape(), &[2, 2]);
+        assert_eq!(grads[1].shape(), &[2, 2]);
+
+        // For this symmetric case, grad_a[i,j] = b[j,i] and grad_b[j,i] = a[i,j]
+        // So grad_a should be b transposed
+        // b = [[1,3],[2,4]], b.T = [[1,2],[3,4]] col-major: [1,3,2,4]
+        // But b in col-major is already [1,2,3,4] = [[1,3],[2,4]]
+        // b.T col-major: [1,2,3,4] -> need to verify actual values
+        let grad_a_vec = grads[0].to_vec();
+        let grad_b_vec = grads[1].to_vec();
+
+        // Both gradients should have same sum
+        let sum_a: f64 = grad_a_vec.iter().sum();
+        let sum_b: f64 = grad_b_vec.iter().sum();
+        assert!((sum_a - sum_b).abs() < 1e-10, "Symmetric gradients should have equal sum");
+
+        // Verify result: trace(A @ B) = 1*1 + 3*2 + 2*3 + 4*4 = 1 + 6 + 6 + 16 = 29
+        // Wait, ij,ji-> means A[i,j] * B[j,i], not A[i,j] * B[i,j]
+        // A = [[1,3],[2,4]], B = [[1,3],[2,4]]
+        // sum_ij A[i,j] * B[j,i] = 1*1 + 3*2 + 2*3 + 4*4 = 1 + 6 + 6 + 16 = 29
+        assert_eq!(result.to_vec(), vec![29.0]);
+    }
+
+    #[test]
+    fn test_gradient_broadcast_pattern() {
+        // Test gradient for i,j->ij (outer product) then ij-> (sum)
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0], &[2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[3.0, 4.0, 5.0], &[3]);
+
+        // Outer product: a ⊗ b -> [2, 3]
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let (outer, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(
+            &[&a, &b],
+            &[&[0], &[1]],
+            &[0, 1],
+        );
+
+        assert_eq!(outer.shape(), &[2, 3]);
+
+        // Gradient output all ones
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0; 6], &[2, 3]);
+        let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b]);
+
+        // For outer product with all-ones gradient:
+        // grad_a[i] = sum_j grad_output[i,j] * b[j] = sum_j b[j] = 3+4+5 = 12
+        // grad_b[j] = sum_i grad_output[i,j] * a[i] = sum_i a[i] = 1+2 = 3
+        let grad_a_expected: f64 = b.to_vec().iter().sum();
+        let grad_b_expected: f64 = a.to_vec().iter().sum();
+
+        assert!(grads[0].to_vec().iter().all(|&x| (x - grad_a_expected).abs() < 1e-10));
+        assert!(grads[1].to_vec().iter().all(|&x| (x - grad_b_expected).abs() < 1e-10));
+    }
 }

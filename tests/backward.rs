@@ -399,3 +399,243 @@ fn test_backward_complex64_nontrivial() {
     assert_eq!(grads[0].shape(), &[2, 1]);
     assert_eq!(grads[1].shape(), &[1, 2]);
 }
+
+// ============================================================================
+// Complex64 Unary Gradient Tests
+// ============================================================================
+
+#[test]
+fn test_backward_complex64_trace() {
+    // Test trace gradient with complex numbers: ii->
+    let a = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 1.0),   // A[0,0] = 1+i
+            Complex64::new(2.0, -1.0),  // A[1,0] = 2-i
+            Complex64::new(3.0, 0.5),   // A[0,1] = 3+0.5i
+            Complex64::new(4.0, -0.5),  // A[1,1] = 4-0.5i
+        ],
+        &[2, 2],
+    );
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<Complex64>, _, _>(&[&a], &[&[0, 0]], &[]);
+
+    // Trace = A[0,0] + A[1,1] = (1+i) + (4-0.5i) = 5 + 0.5i
+    let result_vec = result.to_vec();
+    assert!((result_vec[0] - Complex64::new(5.0, 0.5)).norm() < 1e-10);
+
+    let grad_out = Tensor::<Complex64, Cpu>::from_data(
+        &[Complex64::new(1.0, 0.0)],
+        &[],
+    );
+    let grads = grad_fn.backward::<Standard<Complex64>>(&grad_out, &[&a]);
+
+    // Gradient of trace is identity matrix
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    let grad_vec = grads[0].to_vec();
+    // Should be [[1,0],[0,1]] in col-major: [1, 0, 0, 1]
+    assert!((grad_vec[0] - Complex64::new(1.0, 0.0)).norm() < 1e-10);
+    assert!((grad_vec[1] - Complex64::new(0.0, 0.0)).norm() < 1e-10);
+    assert!((grad_vec[2] - Complex64::new(0.0, 0.0)).norm() < 1e-10);
+    assert!((grad_vec[3] - Complex64::new(1.0, 0.0)).norm() < 1e-10);
+}
+
+#[test]
+fn test_backward_complex64_sum() {
+    // Test sum gradient with complex numbers: ij->
+    let a = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(3.0, 0.5),
+            Complex64::new(4.0, -0.5),
+        ],
+        &[2, 2],
+    );
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<Complex64>, _, _>(&[&a], &[&[0, 1]], &[]);
+
+    // Sum = (1+i) + (2-i) + (3+0.5i) + (4-0.5i) = 10 + 0i
+    let result_vec = result.to_vec();
+    assert!((result_vec[0] - Complex64::new(10.0, 0.0)).norm() < 1e-10);
+
+    let grad_out = Tensor::<Complex64, Cpu>::from_data(
+        &[Complex64::new(1.0, 0.0)],
+        &[],
+    );
+    let grads = grad_fn.backward::<Standard<Complex64>>(&grad_out, &[&a]);
+
+    // Gradient of sum is all ones
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    for &g in grads[0].to_vec().iter() {
+        assert!((g - Complex64::new(1.0, 0.0)).norm() < 1e-10);
+    }
+}
+
+#[test]
+fn test_backward_complex64_transpose() {
+    // Test transpose gradient with complex numbers: ij->ji
+    let a = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(3.0, 0.5),
+            Complex64::new(4.0, -0.5),
+        ],
+        &[2, 2],
+    );
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<Complex64>, _, _>(&[&a], &[&[0, 1]], &[1, 0]);
+
+    assert_eq!(result.shape(), &[2, 2]);
+
+    let grad_out = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let grads = grad_fn.backward::<Standard<Complex64>>(&grad_out, &[&a]);
+
+    // Gradient of transpose with all-ones output grad is all ones (transposed back)
+    assert_eq!(grads[0].shape(), &[2, 2]);
+    for &g in grads[0].to_vec().iter() {
+        assert!((g - Complex64::new(1.0, 0.0)).norm() < 1e-10);
+    }
+}
+
+#[test]
+fn test_backward_complex64_chain() {
+    // Test gradient through chain: (A @ B) where both are complex
+    let a = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 1.0),  // i
+            Complex64::new(0.0, -1.0), // -i
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let b = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 2.0),
+            Complex64::new(1.0, -1.0),
+        ],
+        &[2, 2],
+    );
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<Complex64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    assert_eq!(result.shape(), &[2, 2]);
+
+    let grad_out = Tensor::<Complex64, Cpu>::from_data(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let grads = grad_fn.backward::<Standard<Complex64>>(&grad_out, &[&a, &b]);
+
+    assert_eq!(grads[0].shape(), a.shape());
+    assert_eq!(grads[1].shape(), b.shape());
+
+    // Verify gradients are computed (non-trivial)
+    let grad_a_nonzero = grads[0].to_vec().iter().any(|g| g.norm() > 1e-10);
+    let grad_b_nonzero = grads[1].to_vec().iter().any(|g| g.norm() > 1e-10);
+    assert!(grad_a_nonzero, "Gradient of A should be non-zero");
+    assert!(grad_b_nonzero, "Gradient of B should be non-zero");
+}
+
+// ============================================================================
+// Additional Pattern Coverage Tests
+// ============================================================================
+
+#[test]
+fn test_backward_rectangular_matmul_variants() {
+    // Test all matmul transpose combinations with rectangular matrices
+
+    // A: 2x3, B: 3x4 -> C: 2x4 (standard)
+    let a = Tensor::<f64, Cpu>::from_data(&(1..=6).map(|x| x as f64).collect::<Vec<_>>(), &[2, 3]);
+    let b = Tensor::<f64, Cpu>::from_data(&(1..=12).map(|x| x as f64).collect::<Vec<_>>(), &[3, 4]);
+
+    let (result, grad_fn) =
+        einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    assert_eq!(result.shape(), &[2, 4]);
+
+    let grad_out = Tensor::<f64, Cpu>::from_data(&vec![1.0; 8], &[2, 4]);
+    let grads = grad_fn.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+
+    assert_eq!(grads[0].shape(), &[2, 3]);
+    assert_eq!(grads[1].shape(), &[3, 4]);
+}
+
+#[test]
+fn test_backward_all_matmul_transposes() {
+    // Test ij,jk->ik, ij,kj->ik, ji,jk->ik, ji,kj->ik
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+
+    // ij,jk->ik (standard)
+    let (_, grad_fn1) = einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0; 4], &[2, 2]);
+    let grads1 = grad_fn1.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+    assert_eq!(grads1[0].shape(), &[2, 2]);
+    assert_eq!(grads1[1].shape(), &[2, 2]);
+
+    // ij,kj->ik (B transposed)
+    let (_, grad_fn2) = einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[2, 1]], &[0, 2]);
+    let grads2 = grad_fn2.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+    assert_eq!(grads2[0].shape(), &[2, 2]);
+    assert_eq!(grads2[1].shape(), &[2, 2]);
+
+    // ji,jk->ik (A transposed)
+    let (_, grad_fn3) = einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[1, 0], &[1, 2]], &[0, 2]);
+    let grads3 = grad_fn3.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+    assert_eq!(grads3[0].shape(), &[2, 2]);
+    assert_eq!(grads3[1].shape(), &[2, 2]);
+
+    // ji,kj->ik (both transposed)
+    let (_, grad_fn4) = einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[1, 0], &[2, 1]], &[0, 2]);
+    let grads4 = grad_fn4.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
+    assert_eq!(grads4[0].shape(), &[2, 2]);
+    assert_eq!(grads4[1].shape(), &[2, 2]);
+}
+
+#[test]
+fn test_backward_3tensor_chain() {
+    // Test gradient through 3-tensor chain: A @ B @ C
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let c = Tensor::<f64, Cpu>::from_data(&[2.0, 0.0, 0.0, 2.0], &[2, 2]);
+
+    // First: A @ B
+    let (ab, grad_fn_ab) = einsum_with_grad::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    // Second: (A @ B) @ C
+    let (result, grad_fn_abc) = einsum_with_grad::<Standard<f64>, _, _>(&[&ab, &c], &[&[0, 1], &[1, 2]], &[0, 2]);
+
+    assert_eq!(result.shape(), &[2, 2]);
+
+    // Backprop through second contraction
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0; 4], &[2, 2]);
+    let grads_abc = grad_fn_abc.backward::<Standard<f64>>(&grad_out, &[&ab, &c]);
+
+    // Backprop through first contraction
+    let grads_ab = grad_fn_ab.backward::<Standard<f64>>(&grads_abc[0], &[&a, &b]);
+
+    assert_eq!(grads_ab[0].shape(), a.shape());
+    assert_eq!(grads_ab[1].shape(), b.shape());
+    assert_eq!(grads_abc[1].shape(), c.shape());
+}

@@ -16,7 +16,7 @@ use crate::tensor::Tensor;
 ///
 /// ```rust
 /// use omeinsum::{Einsum, Tensor, Cpu};
-/// use omeinsum::algebra::MaxPlus;
+/// use omeinsum::algebra::Standard;
 /// use std::collections::HashMap;
 ///
 /// // A[i,j] × B[j,k] → C[i,k]
@@ -31,7 +31,7 @@ use crate::tensor::Tensor;
 /// );
 ///
 /// ein.optimize_greedy();
-/// let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+/// let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b]);
 /// assert_eq!(result.shape(), &[2, 2]);
 /// ```
 pub struct Einsum<L: Label = usize> {

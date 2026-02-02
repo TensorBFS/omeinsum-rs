@@ -36,12 +36,12 @@ impl<T: Scalar, B: Backend> Tensor<T, B> {
     ///
     /// ```rust
     /// use omeinsum::{Tensor, Cpu};
-    /// use omeinsum::algebra::MaxPlus;
+    /// use omeinsum::algebra::Standard;
     ///
     /// // A[i,j,k] × B[j,k,l] → C[i,l]
     /// let a = Tensor::<f32, Cpu>::from_data(&(0..24).map(|x| x as f32).collect::<Vec<_>>(), &[2, 3, 4]);
     /// let b = Tensor::<f32, Cpu>::from_data(&(0..60).map(|x| x as f32).collect::<Vec<_>>(), &[3, 4, 5]);
-    /// let c = a.contract_binary::<MaxPlus<f32>>(&b, &[0, 1, 2], &[1, 2, 3], &[0, 3]);
+    /// let c = a.contract_binary::<Standard<f32>>(&b, &[0, 1, 2], &[1, 2, 3], &[0, 3]);
     /// assert_eq!(c.shape(), &[2, 5]);
     /// ```
     pub fn contract_binary<A: Algebra<Scalar = T, Index = u32>>(

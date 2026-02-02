@@ -276,6 +276,348 @@ where
     }
 }
 
+// ============================================================================
+// CacheTree and cost_and_gradient implementation
+// ============================================================================
+//
+// Port of Julia OMEinsum's bp.jl for computing gradients efficiently.
+// The key insight is to cache intermediate contraction results during forward
+// pass and reuse them during backward pass.
+
+use omeco::NestedEinsum;
+
+use crate::einsum::Einsum;
+
+/// Cache tree for storing intermediate contraction results.
+///
+/// Isomorphic to the contraction tree structure from `NestedEinsum`.
+/// Each node stores the tensor computed at that step, plus optional
+/// argmax for tropical algebras.
+///
+/// # Example
+///
+/// For a contraction `(A @ B) @ C`:
+/// ```text
+/// CacheTree {
+///     content: result of (A @ B) @ C
+///     argmax: Some(...) if tropical
+///     siblings: [
+///         CacheTree { content: result of A @ B, siblings: [A_cache, B_cache] },
+///         CacheTree { content: C, siblings: [] }
+///     ]
+/// }
+/// ```
+pub struct CacheTree<T: Scalar, B: Backend> {
+    /// The cached tensor result at this node
+    pub content: Tensor<T, B>,
+    /// Argmax tensor for tropical algebras (optional)
+    pub argmax: Option<Tensor<u32, B>>,
+    /// Child cache trees (called "siblings" in Julia for tree siblings)
+    pub siblings: Vec<CacheTree<T, B>>,
+}
+
+impl<T: Scalar, B: Backend> CacheTree<T, B> {
+    /// Create a leaf cache (for input tensors).
+    pub fn leaf(tensor: Tensor<T, B>) -> Self {
+        CacheTree {
+            content: tensor,
+            argmax: None,
+            siblings: Vec::new(),
+        }
+    }
+
+    /// Create an internal node cache.
+    pub fn node(content: Tensor<T, B>, argmax: Option<Tensor<u32, B>>, siblings: Vec<Self>) -> Self {
+        CacheTree {
+            content,
+            argmax,
+            siblings,
+        }
+    }
+}
+
+/// Compute einsum with caching for backward pass.
+///
+/// Recursively contracts tensors following the contraction tree,
+/// caching intermediate results for gradient computation.
+///
+/// # Arguments
+///
+/// * `code` - The contraction tree from optimization
+/// * `tensors` - Input tensors
+/// * `size_dict` - Dimension sizes
+///
+/// # Returns
+///
+/// CacheTree containing all intermediate results.
+#[allow(clippy::only_used_in_recursion)]
+pub fn cached_einsum<A, T, B>(
+    code: &NestedEinsum<usize>,
+    tensors: &[&Tensor<T, B>],
+    size_dict: &HashMap<usize, usize>,
+) -> CacheTree<T, B>
+where
+    A: Algebra<Scalar = T, Index = u32>,
+    T: Scalar + BackendScalar<B>,
+    B: Backend + Default,
+{
+    match code {
+        NestedEinsum::Leaf { tensor_index } => {
+            // For leaf nodes, just cache the input tensor
+            CacheTree::leaf(tensors[*tensor_index].clone())
+        }
+        NestedEinsum::Node { args, eins } => {
+            // Recursively cache children
+            let children: Vec<CacheTree<T, B>> = args
+                .iter()
+                .map(|arg| cached_einsum::<A, T, B>(arg, tensors, size_dict))
+                .collect();
+
+            // Contract the children's results
+            assert_eq!(args.len(), 2, "Expected binary contraction tree");
+
+            let left = &children[0].content;
+            let right = &children[1].content;
+            let ia = &eins.ixs[0];
+            let ib = &eins.ixs[1];
+            let iy = &eins.iy;
+
+            let (result, argmax) = if A::needs_argmax() {
+                let (r, am) = left.contract_binary_with_argmax::<A>(right, ia, ib, iy);
+                (r, Some(am))
+            } else {
+                (left.contract_binary::<A>(right, ia, ib, iy), None)
+            };
+
+            CacheTree::node(result, argmax, children)
+        }
+    }
+}
+
+/// Back-propagate gradients through the cache tree.
+///
+/// Given a gradient on the output, propagates it backward through the tree,
+/// computing gradients for all intermediate nodes.
+///
+/// # Arguments
+///
+/// * `code` - The contraction tree
+/// * `cache` - Cached forward results
+/// * `dy` - Gradient on the output
+/// * `size_dict` - Dimension sizes
+///
+/// # Returns
+///
+/// CacheTree where each node's `content` is the gradient at that position.
+#[allow(clippy::only_used_in_recursion)]
+pub fn back_propagate<A, T, B>(
+    code: &NestedEinsum<usize>,
+    cache: &CacheTree<T, B>,
+    dy: &Tensor<T, B>,
+    size_dict: &HashMap<usize, usize>,
+) -> CacheTree<T, B>
+where
+    A: Algebra<Scalar = T, Index = u32>,
+    T: Scalar + BackendScalar<B>,
+    B: Backend + Default,
+{
+    match code {
+        NestedEinsum::Leaf { .. } => {
+            // For leaves, the gradient is just dy
+            CacheTree::leaf(dy.clone())
+        }
+        NestedEinsum::Node { args, eins } => {
+            assert_eq!(args.len(), 2, "Expected binary contraction tree");
+
+            // Get cached forward values
+            let left = &cache.siblings[0].content;
+            let right = &cache.siblings[1].content;
+            let argmax = cache.argmax.as_ref();
+
+            let ia = &eins.ixs[0];
+            let ib = &eins.ixs[1];
+            let iy = &eins.iy;
+
+            // Compute gradients for left and right children
+            let (grad_left, grad_right) =
+                contract_binary_backward::<A, T, B>(dy, left, right, argmax, ia, ib, iy);
+
+            // Recursively back-propagate through children
+            let child_grads: Vec<CacheTree<T, B>> = vec![
+                back_propagate::<A, T, B>(&args[0], &cache.siblings[0], &grad_left, size_dict),
+                back_propagate::<A, T, B>(&args[1], &cache.siblings[1], &grad_right, size_dict),
+            ];
+
+            CacheTree::node(dy.clone(), None, child_grads)
+        }
+    }
+}
+
+/// Extract gradients from leaf nodes of a gradient tree.
+///
+/// # Arguments
+///
+/// * `code` - The contraction tree
+/// * `grad_tree` - The gradient tree from back_propagate
+///
+/// # Returns
+///
+/// Vector of gradients, one per input tensor in original order.
+pub fn extract_leaves<T: Scalar, B: Backend>(
+    code: &NestedEinsum<usize>,
+    grad_tree: &CacheTree<T, B>,
+    num_inputs: usize,
+) -> Vec<Tensor<T, B>> {
+    let mut result: Vec<Option<Tensor<T, B>>> = vec![None; num_inputs];
+    extract_leaves_impl(code, grad_tree, &mut result);
+    result.into_iter().map(|opt| opt.unwrap()).collect()
+}
+
+fn extract_leaves_impl<T: Scalar, B: Backend>(
+    code: &NestedEinsum<usize>,
+    grad_tree: &CacheTree<T, B>,
+    result: &mut [Option<Tensor<T, B>>],
+) {
+    match code {
+        NestedEinsum::Leaf { tensor_index } => {
+            result[*tensor_index] = Some(grad_tree.content.clone());
+        }
+        NestedEinsum::Node { args, .. } => {
+            for (arg, sibling) in args.iter().zip(grad_tree.siblings.iter()) {
+                extract_leaves_impl(arg, sibling, result);
+            }
+        }
+    }
+}
+
+/// Compute cost and gradients in a single optimized pass.
+///
+/// Like Julia's `OMEinsum.cost_and_gradient`, this caches intermediate
+/// contraction results during forward pass and reuses them for backward.
+///
+/// # Arguments
+///
+/// * `code` - The einsum specification (must be optimized)
+/// * `xs` - Input tensors
+/// * `dy` - Optional gradient seed. If `None`, output must be scalar and `1.0` is used.
+///
+/// # Returns
+///
+/// `(cost, grads)` where:
+/// - `cost` - The forward contraction result
+/// - `grads` - Vector of gradients, one per input tensor
+///
+/// # Panics
+///
+/// Panics if `dy` is `None` and the output is not a scalar.
+///
+/// # Example
+///
+/// ```rust
+/// use omeinsum::{Einsum, Tensor, Cpu, cost_and_gradient};
+/// use omeinsum::algebra::Standard;
+/// use std::collections::HashMap;
+///
+/// // Trace: A[i,i] -> scalar
+/// let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+///
+/// let sizes: HashMap<usize, usize> = [(0, 2)].into();
+/// let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+/// ein.optimize_greedy();
+///
+/// let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
+/// assert_eq!(grads.len(), 1);
+/// assert!((cost.to_vec()[0] - 5.0).abs() < 1e-10); // trace = 1 + 4 = 5
+/// ```
+pub fn cost_and_gradient<A, T, B>(
+    code: &Einsum<usize>,
+    xs: &[&Tensor<T, B>],
+    dy: Option<&Tensor<T, B>>,
+) -> (Tensor<T, B>, Vec<Tensor<T, B>>)
+where
+    A: Algebra<Scalar = T, Index = u32>,
+    T: Scalar + BackendScalar<B>,
+    B: Backend + Default,
+{
+    // Require optimization
+    let tree = code
+        .contraction_tree()
+        .expect("cost_and_gradient requires optimized Einsum. Call optimize_greedy() first.");
+
+    // Handle single tensor case specially
+    if xs.len() == 1 {
+        return cost_and_gradient_unary::<A, T, B>(code, xs[0], dy);
+    }
+
+    // Forward pass with caching
+    let cache = cached_einsum::<A, T, B>(tree, xs, &code.size_dict);
+
+    // Initialize dy if not provided
+    let dy_tensor = match dy {
+        Some(d) => d.clone(),
+        None => {
+            // Output must be scalar
+            assert!(
+                code.iy.is_empty(),
+                "cost_and_gradient: output must be scalar when dy is None. Got output indices: {:?}",
+                code.iy
+            );
+            Tensor::from_data(&[A::one().to_scalar()], &[])
+        }
+    };
+
+    // Backward pass through the tree
+    let grad_tree = back_propagate::<A, T, B>(tree, &cache, &dy_tensor, &code.size_dict);
+
+    // Extract leaf gradients
+    let grads = extract_leaves(tree, &grad_tree, xs.len());
+
+    (cache.content, grads)
+}
+
+/// Handle unary case for cost_and_gradient.
+fn cost_and_gradient_unary<A, T, B>(
+    code: &Einsum<usize>,
+    x: &Tensor<T, B>,
+    dy: Option<&Tensor<T, B>>,
+) -> (Tensor<T, B>, Vec<Tensor<T, B>>)
+where
+    A: Algebra<Scalar = T, Index = u32>,
+    T: Scalar + BackendScalar<B>,
+    B: Backend + Default,
+{
+    // Forward pass
+    let (result, argmax) = if A::needs_argmax() {
+        super::engine::execute_unary_with_argmax::<A, T, B>(x, &code.ixs[0], &code.iy, &code.size_dict)
+    } else {
+        (
+            super::engine::execute_unary_naive::<A, T, B>(x, &code.ixs[0], &code.iy, &code.size_dict),
+            Tensor::from_data(&[0u32], &[]), // Dummy, won't be used
+        )
+    };
+
+    // Initialize dy if not provided
+    let dy_tensor = match dy {
+        Some(d) => d.clone(),
+        None => {
+            assert!(
+                code.iy.is_empty(),
+                "cost_and_gradient: output must be scalar when dy is None"
+            );
+            Tensor::from_data(&[A::one().to_scalar()], &[])
+        }
+    };
+
+    // Backward pass
+    let grad = if A::needs_argmax() {
+        tropical_unary_backward::<T, B>(&dy_tensor, &argmax, x.shape())
+    } else {
+        contract_unary_backward::<A, T, B>(&dy_tensor, &code.ixs[0], &code.iy, &code.size_dict)
+    };
+
+    (result, vec![grad])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,7 +1259,7 @@ mod tests {
         let b = Tensor::<f64, Cpu>::from_data(&[3.0, 4.0, 5.0], &[3]);
 
         // Outer product: a ⊗ b -> [2, 3]
-        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
+        let _sizes: HashMap<usize, usize> = [(0, 2), (1, 3)].into();
         let (outer, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(
             &[&a, &b],
             &[&[0], &[1]],
@@ -938,5 +1280,546 @@ mod tests {
 
         assert!(grads[0].to_vec().iter().all(|&x| (x - grad_a_expected).abs() < 1e-10));
         assert!(grads[1].to_vec().iter().all(|&x| (x - grad_b_expected).abs() < 1e-10));
+    }
+
+    // ========================================================================
+    // cost_and_gradient tests
+    // ========================================================================
+
+    use crate::Einsum;
+
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_cost_and_gradient_matmul_to_scalar() {
+        // A[i,j] @ B[j,k] -> scalar (full contraction)
+        // A[2,2], B[2,2] -> scalar by summing over all indices
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        // A @ B contracted fully: sum_{i,j,k} A[i,j] * B[j,k]
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a, &b], None);
+
+        // Verify we get 2 gradients
+        assert_eq!(grads.len(), 2);
+        assert_eq!(grads[0].shape(), a.shape());
+        assert_eq!(grads[1].shape(), b.shape());
+
+        // Cost should be the sum of A @ B
+        // A @ B = [[7, 15], [10, 22]] (column-major)
+        // sum = 7 + 10 + 15 + 22 = 54
+        assert!((cost.to_vec()[0] - 54.0).abs() < 1e-10);
+    }
+
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_cost_and_gradient_chain_3_tensors() {
+        // A[i,j] @ B[j,k] @ C[k] -> scalar
+        // Tests multi-tensor gradient computation
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2], vec![2]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a, &b, &c], None);
+
+        // Verify we get 3 gradients
+        assert_eq!(grads.len(), 3);
+        assert_eq!(grads[0].shape(), a.shape());
+        assert_eq!(grads[1].shape(), b.shape());
+        assert_eq!(grads[2].shape(), c.shape());
+
+        // Verify cost is scalar
+        assert_eq!(cost.shape(), &[]);
+    }
+
+    #[test]
+    fn test_cost_and_gradient_unary_trace() {
+        // Trace: A[i,i] -> scalar
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
+
+        // Trace = 1 + 4 = 5
+        assert!((cost.to_vec()[0] - 5.0).abs() < 1e-10);
+
+        // Gradient of trace is identity on diagonal, 0 elsewhere
+        // In column-major [2,2]: [1, 0, 0, 1]
+        assert_eq!(grads.len(), 1);
+        assert_eq!(grads[0].shape(), &[2, 2]);
+        assert_eq!(grads[0].to_vec(), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_cost_and_gradient_unary_sum() {
+        // Sum all: A[i,j] -> scalar
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
+
+        // Sum = 1 + 2 + 3 + 4 = 10
+        assert!((cost.to_vec()[0] - 10.0).abs() < 1e-10);
+
+        // Gradient of sum is all ones
+        assert_eq!(grads.len(), 1);
+        assert_eq!(grads[0].to_vec(), vec![1.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// bpcheck for cost_and_gradient with multi-tensor contractions.
+    fn bpcheck_cost_and_gradient(
+        tensors: &[Tensor<f64, Cpu>],
+        ixs: &[Vec<usize>],
+        sizes: HashMap<usize, usize>,
+        eta: f64,
+        tol: f64,
+    ) -> bool {
+        let mut ein = Einsum::new(ixs.to_vec(), vec![], sizes);
+        ein.optimize_greedy();
+
+        let tensor_refs: Vec<&Tensor<f64, Cpu>> = tensors.iter().collect();
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &tensor_refs, None);
+        let f_x = cost.to_vec()[0];
+
+        // For each tensor, check gradient via finite differences
+        for (i, (tensor, grad)) in tensors.iter().zip(grads.iter()).enumerate() {
+            let grad_vec = grad.to_vec();
+            let tensor_vec = tensor.to_vec();
+
+            // Compute |g|² and expected change
+            let grad_sq_sum: f64 = grad_vec.iter().map(|x| x * x).sum();
+            let expected_change = eta * grad_sq_sum;
+
+            // Perturb this tensor
+            let perturbed_vec: Vec<f64> = tensor_vec
+                .iter()
+                .zip(grad_vec.iter())
+                .map(|(x, g)| x - eta * g)
+                .collect();
+            let perturbed = Tensor::<f64, Cpu>::from_data(&perturbed_vec, tensor.shape());
+
+            // Recompute with perturbed tensor
+            let mut perturbed_refs = tensor_refs.clone();
+            perturbed_refs[i] = &perturbed;
+            let (cost_perturbed, _) =
+                cost_and_gradient::<Standard<f64>, _, _>(&ein, &perturbed_refs, None);
+            let f_perturbed = cost_perturbed.to_vec()[0];
+
+            let actual_change = f_x - f_perturbed;
+            let error = (actual_change - expected_change).abs();
+            let passed = error < tol || (expected_change > 0.0 && error / expected_change < 0.01);
+
+            if !passed {
+                eprintln!(
+                    "Tensor {} failed: expected={}, actual={}, error={}",
+                    i, expected_change, actual_change, error
+                );
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_bpcheck_cost_and_gradient_matmul() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b],
+            &[vec![0, 1], vec![1, 2]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_bpcheck_cost_and_gradient_3_tensor_chain() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0], &[2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b, c],
+            &[vec![0, 1], vec![1, 2], vec![2]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    #[test]
+    fn test_bpcheck_cost_and_gradient_star_contraction() {
+        // Star contraction: A[i,j], B[j,k], C[k,i] -> scalar
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[9.0, 10.0, 11.0, 12.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b, c],
+            &[vec![0, 1], vec![1, 2], vec![2, 0]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_bpcheck_cost_and_gradient_4_tensors() {
+        // 4-tensor chain: A[i,j] @ B[j,k] @ C[k,l] @ D[l] -> scalar
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[9.0, 10.0, 11.0, 12.0], &[2, 2]);
+        let d = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0], &[2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b, c, d],
+            &[vec![0, 1], vec![1, 2], vec![2, 3], vec![3]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[cfg(feature = "tropical")]
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_cost_and_gradient_tropical_matmul() {
+        // MaxPlus matmul: C[i,k] = max_j (A[i,j] + B[j,k])
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1], vec![1, 2]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<MaxPlus<f64>, _, _>(&ein, &[&a, &b], None);
+
+        // MaxPlus: (A + B)_ik = max_j(A_ij + B_jk)
+        // Then max over i,k: max(5, 6, 7, 8) = 8
+        assert!((cost.to_vec()[0] - 8.0).abs() < 1e-10);
+        assert_eq!(grads.len(), 2);
+    }
+
+    // ========================================================================
+    // Julia OMEinsum.jl compatibility tests
+    // Port of tests from test/bp.jl and test/autodiff.jl
+    // ========================================================================
+
+    /// Julia test: (ij, jk), ki -> scalar (triangle contraction)
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_triangle() {
+        // A[2,3], B[3,4], C[4,2] -> scalar
+        let a = Tensor::<f64, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        );
+        let b = Tensor::<f64, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[3, 4],
+        );
+        let c = Tensor::<f64, Cpu>::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[4, 2],
+        );
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3), (2, 4)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b, c],
+            &[vec![0, 1], vec![1, 2], vec![2, 0]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: matrix-vector product ij, j -> i then sum to scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_matvec() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let v = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0], &[2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, v],
+            &[vec![0, 1], vec![1]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: contract to 0-dim array (ij, ij) -> scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_contract_to_scalar() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b],
+            &[vec![0, 1], vec![0, 1]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: trace (ii) -> scalar
+    #[test]
+    fn test_julia_bp_trace() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let tensor_refs = vec![&a];
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &tensor_refs, None);
+
+        // Verify gradient via finite difference
+        let grad = &grads[0];
+        let eta = 1e-5;
+        let grad_sq_sum: f64 = grad.to_vec().iter().map(|x| x * x).sum();
+        let expected_change = eta * grad_sq_sum;
+
+        let a_vec = a.to_vec();
+        let grad_vec = grad.to_vec();
+        let perturbed_vec: Vec<f64> = a_vec
+            .iter()
+            .zip(grad_vec.iter())
+            .map(|(x, g)| x - eta * g)
+            .collect();
+        let perturbed = Tensor::<f64, Cpu>::from_data(&perturbed_vec, a.shape());
+
+        let (cost_perturbed, _) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&perturbed], None);
+        let actual_change = cost.to_vec()[0] - cost_perturbed.to_vec()[0];
+
+        assert!(
+            (actual_change - expected_change).abs() < 1e-8,
+            "Trace gradient check failed"
+        );
+    }
+
+    /// Julia test: 4D trace (ijji) -> scalar
+    #[test]
+    fn test_julia_bp_trace_4d() {
+        let a = Tensor::<f64, Cpu>::from_data(
+            &(1..=16).map(|x| x as f64).collect::<Vec<_>>(),
+            &[2, 2, 2, 2],
+        );
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1, 1, 0]], vec![], sizes);
+        ein.optimize_greedy();
+
+        // Just verify it runs and produces gradients of correct shape
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
+        assert_eq!(cost.shape(), &[]);
+        assert_eq!(grads[0].shape(), &[2, 2, 2, 2]);
+    }
+
+    /// Julia test: partial trace (ijjk) -> (ik)
+    #[test]
+    fn test_julia_bp_partial_trace() {
+        let a = Tensor::<f64, Cpu>::from_data(
+            &(1..=16).map(|x| x as f64).collect::<Vec<_>>(),
+            &[2, 2, 2, 2],
+        );
+
+        // For scalar output in cost_and_gradient, we need to reduce to scalar
+        // So we test: ijjk -> scalar (trace over i,j,k keeping none)
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1, 1, 2]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
+        assert_eq!(cost.shape(), &[]);
+        assert_eq!(grads[0].shape(), &[2, 2, 2, 2]);
+    }
+
+    /// Julia test: permutation ij -> ji (transpose)
+    #[test]
+    fn test_julia_bp_permutation() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        // For cost_and_gradient: ij -> scalar via transpose then sum
+        // Actually, we need scalar output, so test with ij -> scalar
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        let mut ein = Einsum::new(vec![vec![0, 1]], vec![], sizes);
+        ein.optimize_greedy();
+
+        let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
+
+        // Sum = 10, gradient is all ones
+        assert!((cost.to_vec()[0] - 10.0).abs() < 1e-10);
+        assert!(grads[0].to_vec().iter().all(|&x| (x - 1.0).abs() < 1e-10));
+    }
+
+    /// Julia test: tensor contraction (abcd, bc) -> (ad) then sum to scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_tensor_contraction() {
+        let t = Tensor::<f64, Cpu>::from_data(
+            &(1..=16).map(|x| x as f64).collect::<Vec<_>>(),
+            &[2, 2, 2, 2],
+        );
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[t, a],
+            &[vec![0, 1, 2, 3], vec![1, 2]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: star contraction (ia, ib, ic) -> (abc) then sum to scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_star() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[9.0, 10.0, 11.0, 12.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b, c],
+            &[vec![0, 1], vec![0, 2], vec![0, 3]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: Hadamard product (ij, ij) -> ij then sum to scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_hadamard() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+
+        // Hadamard to scalar: ij, ij -> ()
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b],
+            &[vec![0, 1], vec![0, 1]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: outer product (ij, kl) -> (ijkl) then sum to scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_outer() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+
+        // Outer then sum to scalar
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b],
+            &[vec![0, 1], vec![2, 3]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    /// Julia test: chain ij, jk, kl -> il then sum to scalar
+    /// Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Requires omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_julia_bp_chain_3() {
+        let a = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+        let c = Tensor::<f64, Cpu>::from_data(&[9.0, 10.0, 11.0, 12.0], &[2, 2]);
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
+        assert!(bpcheck_cost_and_gradient(
+            &[a, b, c],
+            &[vec![0, 1], vec![1, 2], vec![2, 3]],
+            sizes,
+            1e-5,
+            1e-8
+        ));
+    }
+
+    // ========================================================================
+    // omeco issue tracking tests
+    // See: https://github.com/GiggleLiu/omeco/issues/13
+    // ========================================================================
+
+    /// Test that omeco's optimize_code respects the final output indices.
+    /// Currently fails because omeco returns a tree with iy=[0,2] instead of iy=[].
+    /// Tracked in: https://github.com/GiggleLiu/omeco/issues/13
+    #[test]
+    #[ignore = "Waiting for omeco fix: https://github.com/GiggleLiu/omeco/issues/13"]
+    fn test_omeco_respects_final_iy() {
+        use omeco::{optimize_code, EinCode, GreedyMethod, NestedEinsum};
+
+        // A[i,j] @ B[j,k] -> scalar (empty output)
+        let code = EinCode::new(vec![vec![0, 1], vec![1, 2]], vec![]);
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
+        let optimizer = GreedyMethod::new(0.0, 0.0);
+
+        if let Some(tree) = optimize_code(&code, &sizes, &optimizer) {
+            match &tree {
+                NestedEinsum::Node { eins, .. } => {
+                    // This currently fails: eins.iy is [0, 2], not []
+                    assert_eq!(
+                        eins.iy, code.iy,
+                        "omeco should respect the final output indices. \
+                         Expected iy={:?}, got iy={:?}",
+                        code.iy, eins.iy
+                    );
+                }
+                NestedEinsum::Leaf { .. } => panic!("Expected Node, got Leaf"),
+            }
+        } else {
+            panic!("optimize_code returned None");
+        }
     }
 }

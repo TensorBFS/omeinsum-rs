@@ -99,6 +99,14 @@ impl<L: Label> Einsum<L> {
     pub fn contraction_tree(&self) -> Option<&NestedEinsum<L>> {
         self.optimized.as_ref()
     }
+
+    /// Set a pre-computed contraction tree.
+    ///
+    /// This is useful for benchmarking with pre-optimized trees loaded from files.
+    pub fn set_contraction_tree(&mut self, tree: NestedEinsum<L>) -> &mut Self {
+        self.optimized = Some(tree);
+        self
+    }
 }
 
 impl Einsum<usize> {

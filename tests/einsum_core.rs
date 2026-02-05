@@ -84,7 +84,7 @@ fn test_einsum_contract_to_scalar() {
 
     let result = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[0, 1]], &[]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // sum(a .* a) = 1 + 4 + 9 + 16 = 30
     assert_eq!(result.to_vec(), vec![30.0]);
 }
@@ -102,7 +102,7 @@ fn test_einsum_trace_2x2() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // trace = 1 + 4 = 5
     assert_eq!(result.to_vec(), vec![5.0]);
 }
@@ -117,7 +117,7 @@ fn test_einsum_trace_4d() {
     let ein = Einsum::new(vec![vec![0, 1, 1, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&aa]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
 }
 
 // ============================================================================
@@ -321,7 +321,7 @@ fn test_einsum_sum_all() {
     let ein = Einsum::new(vec![vec![0, 1, 2]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![30.0]);
 }
 
@@ -389,7 +389,7 @@ fn test_einsum_combined_trace_and_diag() {
     let ein = Einsum::new(vec![vec![0, 0, 1, 1]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
 }
 
 #[test]
@@ -420,7 +420,7 @@ fn test_einsum_single_element() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![5.0]);
 }
 
@@ -500,7 +500,7 @@ fn test_einsum_valid_edge_cases() {
     // Scalar output from vector
     let v = Tensor::<f64, Cpu>::from_data(&[1.0, 2.0, 3.0], &[3]);
     let result = einsum::<Standard<f64>, _, _>(&[&v], &[&[0]], &[]);
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![6.0]);
 }
 
@@ -558,7 +558,7 @@ fn test_einsum_all_indices_contracted() {
     let ein = Einsum::new(vec![vec![0, 1], vec![1, 2], vec![2, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a, &b, &c]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // trace(A @ I @ I) = trace(A) = 1 + 4 = 5
     assert_eq!(result.to_vec(), vec![5.0]);
 }
@@ -684,7 +684,7 @@ fn test_einsum_triple_contraction() {
     let ein = Einsum::new(vec![vec![0, 1], vec![1, 2], vec![2, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a, &b, &c]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // trace(A @ B @ C) - diagonal matrices so result is diagonal product trace
 }
 
@@ -697,7 +697,7 @@ fn test_einsum_diagonal_sum() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // col-major: diag = [1, 5, 9]
     assert_eq!(result.to_vec(), vec![15.0]);
 }
@@ -769,7 +769,7 @@ fn test_einsum_self_contraction() {
     let a = Tensor::<f64, Cpu>::from_data(&vec![2.0; 24], &[2, 3, 4]);
 
     let result = einsum::<Standard<f64>, _, _>(&[&a, &a], &[&[0, 1, 2], &[0, 1, 2]], &[]);
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // sum(a^2) = 24 * 4 = 96
     assert_eq!(result.to_vec(), vec![96.0]);
 }
@@ -785,7 +785,7 @@ fn test_einsum_cyclic_contraction() {
     let ein = Einsum::new(vec![vec![0, 1], vec![1, 2], vec![2, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a, &b, &c]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // This is trace(A @ B @ C)
 }
 

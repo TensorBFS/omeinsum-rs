@@ -817,7 +817,7 @@ mod tests {
     fn test_linear_to_multi_empty_shape() {
         // Empty shape should return empty multi-index
         let result = linear_to_multi(0, &[]);
-        assert_eq!(result, vec![]);
+        assert_eq!(result, Vec::<usize>::new());
     }
 
     #[test]

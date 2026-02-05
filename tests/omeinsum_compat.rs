@@ -82,7 +82,7 @@ fn test_dot_product() {
     // i,i->: contract over i to get scalar
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0], &[0]], &[]);
 
-    assert_eq!(c.shape(), &[]);
+    assert_eq!(c.shape(), &[] as &[usize]);
     // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
     assert_eq!(c.to_vec(), vec![32.0]);
 }
@@ -325,7 +325,7 @@ fn test_tensor_network_contraction() {
     // ij,jk,ki->: full contraction to scalar (trace of product)
     let d = einsum::<Standard<f64>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 0]], &[]);
 
-    assert_eq!(d.shape(), &[]);
+    assert_eq!(d.shape(), &[] as &[usize]);
     // tr(A @ I @ I) = tr(A) = 1 + 4 = 5 (col-major A = [[1,3],[2,4]])
     assert_eq!(d.to_vec(), vec![5.0]);
 }

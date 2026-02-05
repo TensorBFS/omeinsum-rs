@@ -1399,7 +1399,7 @@ fn test_cuda_einsum_inner_product() {
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0], &[0]], &[]);
 
-    assert_eq!(c.shape(), &[]);
+    assert_eq!(c.shape(), &[] as &[usize]);
     // 1*2 + 2*3 + 3*4 + 4*5 = 2 + 6 + 12 + 20 = 40
     assert_eq!(c.to_vec(), vec![40.0]);
 }
@@ -1443,7 +1443,7 @@ fn test_cuda_einsum_trace() {
     // ii-> (trace)
     let trace = einsum::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
 
-    assert_eq!(trace.shape(), &[]);
+    assert_eq!(trace.shape(), &[] as &[usize]);
     // trace = a[0,0] + a[1,1] = 1 + 4 = 5
     assert_eq!(trace.to_vec(), vec![5.0]);
 }
@@ -1509,7 +1509,7 @@ fn test_cuda_einsum_complex_trace() {
     // trace = A[0,0] + A[1,1] = (1+i) + (4-i) = 5
     let trace = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a], &[&[0, 0]], &[]);
 
-    assert_eq!(trace.shape(), &[]);
+    assert_eq!(trace.shape(), &[] as &[usize]);
     let result = trace.to_vec();
     assert_eq!(result.len(), 1);
     assert!((result[0].re() - 5.0).abs() < 1e-10);
@@ -1538,7 +1538,7 @@ fn test_cuda_einsum_complex_inner_product() {
     // = (1 + 1) + (2i - i²) = 2 + (2i + 1) = 3 + 2i
     let inner = einsum::<Standard<CudaComplex<f64>>, _, _>(&[&a, &b], &[&[0], &[0]], &[]);
 
-    assert_eq!(inner.shape(), &[]);
+    assert_eq!(inner.shape(), &[] as &[usize]);
     let result = inner.to_vec();
     assert_eq!(result.len(), 1);
     assert!((result[0].re() - 3.0).abs() < 1e-10, "re = {}", result[0].re());
@@ -1621,7 +1621,7 @@ fn test_cuda_unary_trace_2x2() {
 
     let trace = einsum::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
 
-    assert_eq!(trace.shape(), &[]);
+    assert_eq!(trace.shape(), &[] as &[usize]);
     assert_eq!(trace.to_vec(), vec![5.0]);
 }
 
@@ -1639,7 +1639,7 @@ fn test_cuda_unary_trace_3x3() {
 
     let trace = einsum::<Standard<f64>, _, _>(&[&a], &[&[0, 0]], &[]);
 
-    assert_eq!(trace.shape(), &[]);
+    assert_eq!(trace.shape(), &[] as &[usize]);
     assert_eq!(trace.to_vec(), vec![15.0]);
 }
 
@@ -1689,7 +1689,7 @@ fn test_cuda_unary_sum_all_2d() {
 
     let sum = einsum::<Standard<f64>, _, _>(&[&a], &[&[0, 1]], &[]);
 
-    assert_eq!(sum.shape(), &[]);
+    assert_eq!(sum.shape(), &[] as &[usize]);
     assert_eq!(sum.to_vec(), vec![21.0]);
 }
 
@@ -2927,7 +2927,7 @@ fn test_cuda_compat_tensor_network_contraction() {
     // ij,jk,ki->: full contraction to scalar (trace of product)
     let d = einsum::<Standard<f64>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 0]], &[]);
 
-    assert_eq!(d.shape(), &[]);
+    assert_eq!(d.shape(), &[] as &[usize]);
     // tr(A @ I @ I) = tr(A) = 1 + 4 = 5 (col-major A = [[1,3],[2,4]])
     assert_eq!(d.to_vec(), vec![5.0]);
 }
@@ -3029,7 +3029,7 @@ fn test_cuda_core_contract_to_scalar() {
 
     let result = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[0, 1]], &[]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // sum(a .* a) = 1 + 4 + 9 + 16 = 30
     assert_eq!(result.to_vec(), vec![30.0]);
 }
@@ -3044,7 +3044,7 @@ fn test_cuda_core_trace_4d() {
 
     let result = einsum::<Standard<f64>, _, _>(&[&aa], &[&[0, 1, 1, 0]], &[]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
 }
 
 /// GPU test: Partial trace (ijjk -> ik).
@@ -3211,7 +3211,7 @@ fn test_cuda_edge_scalar_contraction() {
     let v = Tensor::<f64, Cuda>::from_data_with_backend(&[1.0, 2.0, 3.0], &[3], cuda);
     let result = einsum::<Standard<f64>, _, _>(&[&v], &[&[0]], &[]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![6.0]);
 }
 
@@ -3268,7 +3268,7 @@ fn test_cuda_edge_all_contracted() {
     // ij,jk,ki-> (full contraction)
     let result = einsum::<Standard<f64>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 0]], &[]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // trace(A @ I @ I) = trace(A) = 1 + 4 = 5
     assert_eq!(result.to_vec(), vec![5.0]);
 }

@@ -403,8 +403,8 @@ fn test_optimizer_4d_tensors() {
     ein.optimize_greedy();
     assert!(ein.is_optimized());
 
-    let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t1 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2]);
     assert_eq!(result.shape(), &[2, 2, 2, 2]);
@@ -492,10 +492,10 @@ fn test_optimizer_ladder_network() {
     ein.optimize_greedy();
     assert!(ein.is_optimized());
 
-    let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 6], &[2, 3]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 18], &[3, 2, 3]);
-    let t3 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 18], &[3, 2, 3]);
-    let t4 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 6], &[3, 2]);
+    let t1 = Tensor::<f64, Cpu>::from_data(&[1.0; 6], &[2, 3]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 18], &[3, 2, 3]);
+    let t3 = Tensor::<f64, Cpu>::from_data(&[1.0; 18], &[3, 2, 3]);
+    let t4 = Tensor::<f64, Cpu>::from_data(&[1.0; 6], &[3, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2, &t3, &t4]);
     assert_eq!(result.shape(), &[2, 2, 2, 2]);
@@ -523,10 +523,10 @@ fn test_optimizer_grid_network() {
     ein.optimize_greedy();
     assert!(ein.is_optimized());
 
-    let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 4], &[2, 2]);
-    let t3 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 4], &[2, 2]);
-    let t4 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t1 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 4], &[2, 2]);
+    let t3 = Tensor::<f64, Cpu>::from_data(&[1.0; 4], &[2, 2]);
+    let t4 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2, &t3, &t4]);
     assert_eq!(result.shape(), &[2, 2]);
@@ -551,9 +551,9 @@ fn test_optimizer_asymmetric_dimensions() {
     ein.optimize_greedy();
     assert!(ein.is_optimized());
 
-    let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 6], &[2, 3]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 12], &[3, 4]);
-    let t3 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 20], &[4, 5]);
+    let t1 = Tensor::<f64, Cpu>::from_data(&[1.0; 6], &[2, 3]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 12], &[3, 4]);
+    let t3 = Tensor::<f64, Cpu>::from_data(&[1.0; 20], &[4, 5]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2, &t3]);
     // Shape may be [2,5] or [5,2] depending on optimizer's internal ordering
@@ -576,9 +576,9 @@ fn test_optimizer_large_intermediate() {
     ein.optimize_greedy();
     assert!(ein.is_optimized());
 
-    let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 12], &[3, 4]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 12], &[3, 4]);
-    let t3 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[4, 4]);
+    let t1 = Tensor::<f64, Cpu>::from_data(&[1.0; 12], &[3, 4]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 12], &[3, 4]);
+    let t3 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[4, 4]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2, &t3]);
     assert_eq!(result.shape(), &[3, 3]);

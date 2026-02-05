@@ -1191,8 +1191,8 @@ mod tests {
     fn test_gradient_4d_tensor_contract() {
         // Test gradient for higher-dimensional contraction
         // ijkl,klmn->ijmn
-        let a = Tensor::<f64, Cpu>::from_data(&vec![0.1; 16], &[2, 2, 2, 2]);
-        let b = Tensor::<f64, Cpu>::from_data(&vec![0.2; 16], &[2, 2, 2, 2]);
+        let a = Tensor::<f64, Cpu>::from_data(&[0.1; 16], &[2, 2, 2, 2]);
+        let b = Tensor::<f64, Cpu>::from_data(&[0.2; 16], &[2, 2, 2, 2]);
 
         let (result, grad_fn) = einsum_with_grad::<Standard<f64>, _, _>(
             &[&a, &b],
@@ -1202,7 +1202,7 @@ mod tests {
 
         assert_eq!(result.shape(), &[2, 2, 2, 2]);
 
-        let grad_output = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+        let grad_output = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
         let grads = grad_fn.backward::<Standard<f64>>(&grad_output, &[&a, &b]);
 
         assert_eq!(grads[0].shape(), a.shape());

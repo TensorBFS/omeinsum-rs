@@ -721,8 +721,8 @@ mod tests {
         let t = Tensor::<f32, Cpu>::from_data(&data, &[2, 3, 2]);
 
         // In column-major, elements are ordered by first dim varying fastest
-        for i in 0..12 {
-            assert_eq!(t.get(i), data[i]);
+        for (i, &expected) in data.iter().enumerate() {
+            assert_eq!(t.get(i), expected);
         }
     }
 }

@@ -49,7 +49,7 @@ fn test_unary_trace_3x3() {
 #[test]
 fn test_unary_trace_5x5() {
     // ii -> (trace of 5x5 matrix)
-    let mut data = vec![0.0; 25];
+    let mut data = [0.0; 25];
     for i in 0..5 {
         data[i * 5 + i] = (i + 1) as f64; // Diagonal elements at column-major positions
     }

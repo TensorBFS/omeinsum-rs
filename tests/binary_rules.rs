@@ -330,8 +330,8 @@ fn test_binary_regression_complex_contraction() {
     .into();
 
     // Simpler contraction: ijkl,lmn->ijkmn
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
-    let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 8], &[2, 2, 2]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0; 8], &[2, 2, 2]);
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2, 3], &[3, 4, 5]], &[0, 1, 2, 4, 5]);
 
@@ -499,8 +499,8 @@ fn test_binary_batched_diagonal_contract() {
 #[test]
 fn test_binary_higher_order_contraction() {
     // ijkl,klmn->ijmn (4D tensors, contract k,l)
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
-    let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2, 3], &[2, 3, 4, 5]], &[0, 1, 4, 5]);
 
@@ -513,8 +513,8 @@ fn test_binary_higher_order_contraction() {
 #[test]
 fn test_binary_partial_contraction() {
     // ijk,jk->i (contract j,k, keep i)
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 24], &[2, 3, 4]);
-    let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 12], &[3, 4]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 24], &[2, 3, 4]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0; 12], &[3, 4]);
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2], &[1, 2]], &[0]);
     assert_eq!(c.shape(), &[2]);
@@ -579,7 +579,7 @@ fn test_binary_6d_to_3d() {
     );
 
     let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 64], &[2, 2, 2, 2, 2, 2]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2]);
     assert_eq!(result.shape(), &[2, 2, 2, 2]);
@@ -607,7 +607,7 @@ fn test_binary_7d_tensor() {
     );
 
     let t1 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 128], &[2, 2, 2, 2, 2, 2, 2]);
-    let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t2 = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2]);
     assert_eq!(result.shape(), &[2, 2, 2, 2, 2]);

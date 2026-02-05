@@ -585,8 +585,8 @@ fn test_3d_tensor_contraction() {
 #[test]
 fn test_4d_batch_contraction() {
     // Batch of batch matmul: ein"abij,abjk -> abik"
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
-    let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
 
     let c =
         einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2, 3], &[0, 1, 3, 4]], &[0, 1, 2, 4]);

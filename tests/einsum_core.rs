@@ -15,7 +15,7 @@ use omeinsum::{einsum, Standard, Tensor};
 #[test]
 fn test_einsum_identity_4d() {
     // ijkl -> ijkl (4D identity)
-    let t = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
     let ein = Einsum::new(vec![vec![0, 1, 2, 3]], vec![0, 1, 2, 3], sizes);
@@ -127,7 +127,7 @@ fn test_einsum_trace_4d() {
 #[test]
 fn test_einsum_partial_trace() {
     // ijjk -> ik
-    let aa = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let aa = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
     let ein = Einsum::new(vec![vec![0, 1, 1, 2]], vec![0, 2], sizes);
@@ -139,7 +139,7 @@ fn test_einsum_partial_trace() {
 #[test]
 fn test_einsum_partial_trace_permuted() {
     // ijjk -> ki (with permutation)
-    let aa = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let aa = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
     let ein = Einsum::new(vec![vec![0, 1, 1, 2]], vec![2, 0], sizes);
@@ -155,7 +155,7 @@ fn test_einsum_partial_trace_permuted() {
 #[test]
 fn test_einsum_diag_extract() {
     // ijjk -> ijk (extract "diagonal" along middle indices)
-    let aa = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let aa = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2)].into();
     let ein = Einsum::new(vec![vec![0, 1, 1, 2]], vec![0, 1, 2], sizes);
@@ -186,7 +186,7 @@ fn test_einsum_permute_2d() {
 #[test]
 fn test_einsum_permute_4d() {
     // ijkl -> jkil
-    let t = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let sizes: HashMap<usize, usize> = [(0, 2), (1, 2), (2, 2), (3, 2)].into();
     let ein = Einsum::new(vec![vec![0, 1, 2, 3]], vec![1, 2, 0, 3], sizes);
@@ -202,7 +202,7 @@ fn test_einsum_permute_4d() {
 #[test]
 fn test_einsum_tensor_contraction_4d_2d() {
     // ijkl,jk -> il
-    let t = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
 
     let result = einsum::<Standard<f64>, _, _>(&[&t, &a], &[&[0, 1, 2, 3], &[1, 2]], &[0, 3]);
@@ -213,7 +213,7 @@ fn test_einsum_tensor_contraction_4d_2d() {
 #[test]
 fn test_einsum_tensor_contraction_permuted() {
     // lkji,jk -> il (permuted input)
-    let t = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let t = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
     let a = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
 
     let result = einsum::<Standard<f64>, _, _>(&[&t, &a], &[&[3, 2, 1, 0], &[1, 2]], &[0, 3]);
@@ -383,7 +383,7 @@ fn test_einsum_project_to_diag() {
 #[test]
 fn test_einsum_combined_trace_and_diag() {
     // iijj -> (double trace)
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let sizes: HashMap<usize, usize> = [(0, 2), (1, 2)].into();
     let ein = Einsum::new(vec![vec![0, 0, 1, 1]], vec![], sizes);
@@ -395,8 +395,8 @@ fn test_einsum_combined_trace_and_diag() {
 #[test]
 fn test_einsum_tensor_network_cycle() {
     // ijkl,jkmn -> ilmn (tensor contraction)
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
-    let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 16], &[2, 2, 2, 2]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0; 16], &[2, 2, 2, 2]);
 
     let result = einsum::<Standard<f64>, _, _>(
         &[&a, &b],
@@ -596,8 +596,8 @@ fn test_einsum_size_consistency() {
 #[test]
 fn test_einsum_batch_matrix_vector() {
     // bij,bj -> bi (batched matrix-vector multiply)
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 24], &[2, 3, 4]); // batch=2, rows=3, cols=4
-    let v = Tensor::<f64, Cpu>::from_data(&vec![1.0; 8], &[2, 4]); // batch=2, cols=4
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 24], &[2, 3, 4]); // batch=2, rows=3, cols=4
+    let v = Tensor::<f64, Cpu>::from_data(&[1.0; 8], &[2, 4]); // batch=2, cols=4
 
     let result = einsum::<Standard<f64>, _, _>(&[&a, &v], &[&[0, 1, 2], &[0, 2]], &[0, 1]);
     assert_eq!(result.shape(), &[2, 3]);
@@ -766,7 +766,7 @@ fn test_einsum_kronecker_product() {
 #[test]
 fn test_einsum_self_contraction() {
     // ijk,ijk -> (self dot product)
-    let a = Tensor::<f64, Cpu>::from_data(&vec![2.0; 24], &[2, 3, 4]);
+    let a = Tensor::<f64, Cpu>::from_data(&[2.0; 24], &[2, 3, 4]);
 
     let result = einsum::<Standard<f64>, _, _>(&[&a, &a], &[&[0, 1, 2], &[0, 1, 2]], &[]);
     assert_eq!(result.shape(), &[] as &[usize]);

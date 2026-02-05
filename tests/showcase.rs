@@ -225,6 +225,7 @@ fn test_mps_heisenberg_ground_state() {
     let mut h_matrix = vec![vec![0.0f64; dim]; dim];
 
     for bond in 0..(n_sites - 1) {
+        #[allow(clippy::needless_range_loop)]
         for i in 0..dim {
             // Sᶻᵢ Sᶻᵢ₊₁ (diagonal)
             let si = if (i >> bond) & 1 == 0 { 0.5 } else { -0.5 };
@@ -322,11 +323,11 @@ fn test_mps_heisenberg_ground_state() {
             .collect()
     }
 
-    let mut a1 = init_mps(100, 1 * 2 * chi);
+    let mut a1 = init_mps(100, 2 * chi);
     let mut a2 = init_mps(200, chi * 2 * chi);
     let mut a3 = init_mps(300, chi * 2 * chi);
     let mut a4 = init_mps(400, chi * 2 * chi);
-    let mut a5 = init_mps(500, chi * 2 * 1);
+    let mut a5 = init_mps(500, chi * 2);
 
     // Contract MPS to state vector
     fn contract_mps(a1: &[f64], a2: &[f64], a3: &[f64], a4: &[f64], a5: &[f64], chi: usize) -> Vec<f64> {
@@ -374,7 +375,8 @@ fn test_mps_heisenberg_ground_state() {
     }
 
     // Gradient via finite differences
-    fn grad_fd(a: &mut Vec<f64>, idx: usize, a1: &[f64], a2: &[f64], a3: &[f64],
+    #[allow(clippy::too_many_arguments)]
+    fn grad_fd(a: &mut [f64], idx: usize, a1: &[f64], a2: &[f64], a3: &[f64],
                a4: &[f64], a5: &[f64], h: &[Vec<f64>], chi: usize, eps: f64) -> Vec<f64> {
         let n = a.len();
         let mut g = vec![0.0; n];

@@ -1008,7 +1008,7 @@ mod tests {
         let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // trace = A[0,0] + A[1,1] = 1 + 4 = 5
-        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.shape(), &[] as &[usize]);
         assert_eq!(result.to_vec()[0], 5.0);
     }
 

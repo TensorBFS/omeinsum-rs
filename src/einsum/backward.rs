@@ -1651,7 +1651,7 @@ mod tests {
 
         // Just verify it runs and produces gradients of correct shape
         let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
-        assert_eq!(cost.shape(), &[]);
+        assert_eq!(cost.shape(), &[] as &[usize]);
         assert_eq!(grads[0].shape(), &[2, 2, 2, 2]);
     }
 
@@ -1670,7 +1670,7 @@ mod tests {
         ein.optimize_greedy();
 
         let (cost, grads) = cost_and_gradient::<Standard<f64>, _, _>(&ein, &[&a], None);
-        assert_eq!(cost.shape(), &[]);
+        assert_eq!(cost.shape(), &[] as &[usize]);
         assert_eq!(grads[0].shape(), &[2, 2, 2, 2]);
     }
 

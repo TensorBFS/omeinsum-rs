@@ -104,7 +104,7 @@ fn test_optimizer_five_tensor_chain() {
     let t5 = Tensor::<f64, Cpu>::from_data(&[1.0; 4], &[2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2, &t3, &t4, &t5]);
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn test_optimizer_cycle_contraction() {
     let c = Tensor::<f64, Cpu>::from_data(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a, &b, &c]);
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // tr(A @ I @ I) = tr(A) = 1 + 4 = 5
     assert_eq!(result.to_vec(), vec![5.0]);
 }
@@ -599,7 +599,7 @@ fn test_optimizer_all_same_index() {
     let t = Tensor::<f64, Cpu>::from_data(&data, &[2, 2, 2]);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
 }
 
 #[test]

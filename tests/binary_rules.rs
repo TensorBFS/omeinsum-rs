@@ -97,7 +97,7 @@ fn test_binary_dot_product() {
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0], &[0]], &[]);
 
-    assert_eq!(c.shape(), &[]);
+    assert_eq!(c.shape(), &[] as &[usize]);
     // 1*4 + 2*5 + 3*6 = 32
     assert_eq!(c.to_vec(), vec![32.0]);
 }

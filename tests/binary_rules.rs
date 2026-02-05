@@ -110,7 +110,7 @@ fn test_binary_inner_product_matrix() {
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[0, 1]], &[]);
 
-    assert_eq!(c.shape(), &[]);
+    assert_eq!(c.shape(), &[] as &[usize]);
     // 1*1 + 2*2 + 3*3 + 4*4 = 30
     assert_eq!(c.to_vec(), vec![30.0]);
 }
@@ -663,7 +663,7 @@ fn test_binary_many_contracted_dims() {
     let t2 = Tensor::<f64, Cpu>::from_data(&vec![1.0; 64], &[2, 2, 2, 2, 2, 2]);
 
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&t1, &t2]);
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     // Inner product of two all-ones vectors of length 64
     assert_eq!(result.to_vec(), vec![64.0]);
 }

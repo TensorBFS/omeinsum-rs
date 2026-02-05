@@ -459,6 +459,8 @@ where
 ///
 /// * `code` - The contraction tree
 /// * `grad_tree` - The gradient tree from back_propagate
+/// * `num_inputs` - Total number of input tensors; used to pre-allocate the
+///   result vector and index gradients by their original tensor positions.
 ///
 /// # Returns
 ///
@@ -1338,7 +1340,7 @@ mod tests {
         assert_eq!(grads[2].shape(), c.shape());
 
         // Verify cost is scalar
-        assert_eq!(cost.shape(), &[]);
+        assert_eq!(cost.shape(), &[] as &[usize]);
     }
 
     #[test]

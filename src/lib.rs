@@ -14,7 +14,7 @@
 //!
 //! ```rust
 //! use omeinsum::{Tensor, Einsum, einsum, Cpu};
-//! use omeinsum::algebra::{Standard, MaxPlus};
+//! use omeinsum::algebra::Standard;
 //!
 //! // Standard matrix multiplication
 //! let a = Tensor::<f32, Cpu>::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
@@ -22,6 +22,12 @@
 //!
 //! // C[i,k] = Σ_j A[i,j] × B[j,k]
 //! let c = einsum::<Standard<f32>, _, _>(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]);
+//! ```
+//!
+//! With the `tropical` feature enabled:
+//!
+//! ```rust,ignore
+//! use omeinsum::{einsum, Tensor, Cpu, MaxPlus};
 //!
 //! // Tropical (max-plus) matrix multiplication
 //! // C[i,k] = max_j (A[i,j] + B[j,k])
@@ -61,7 +67,7 @@ pub mod tensor;
 // Re-exports
 pub use algebra::{Algebra, Complex32, Complex64, Semiring, Standard};
 pub use backend::{Backend, BackendScalar, Cpu, Storage};
-pub use einsum::{einsum, einsum_with_grad, EinBuilder, Einsum};
+pub use einsum::{cost_and_gradient, einsum, einsum_with_grad, EinBuilder, Einsum};
 pub use tensor::{Tensor, TensorView};
 
 #[cfg(feature = "tropical")]

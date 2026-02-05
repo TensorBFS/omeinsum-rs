@@ -6,7 +6,7 @@ use omeinsum::{Cpu, Standard};
 #[test]
 fn test_cpu_contract_matmul() {
     // ij,jk->ik (matrix multiplication)
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     let a = vec![1.0f64, 2.0, 3.0, 4.0]; // 2x2 column-major
     let b = vec![5.0, 6.0, 7.0, 8.0];
@@ -28,7 +28,7 @@ fn test_cpu_contract_matmul() {
 #[test]
 fn test_cpu_contract_inner_product() {
     // i,i-> (inner product)
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     let a = vec![1.0f64, 2.0, 3.0];
     let b = vec![4.0, 5.0, 6.0];
@@ -46,7 +46,7 @@ fn test_cpu_contract_inner_product() {
 #[test]
 fn test_cpu_contract_outer_product() {
     // i,j->ij (outer product)
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     let a = vec![1.0f64, 2.0];
     let b = vec![3.0, 4.0, 5.0];
@@ -65,7 +65,7 @@ fn test_cpu_contract_outer_product() {
 #[test]
 fn test_cpu_contract_batched() {
     // bij,bjk->bik (batched matmul)
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     // 2 batches of 2x2 matrices
     let a = vec![1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
@@ -115,7 +115,7 @@ fn test_cpu_contract_tropical() {
 #[test]
 fn test_cpu_contract_strided_input() {
     // Test that non-contiguous inputs are handled correctly
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     // Create a 3x3 matrix in column-major
     // [[1,4,7], [2,5,8], [3,6,9]]
@@ -141,7 +141,7 @@ fn test_cpu_contract_strided_input() {
 #[test]
 fn test_cpu_contract_both_strided() {
     // Both inputs are strided
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     // 4x4 matrix, we'll use strided views of 2x2 submatrices
     let data_a = vec![
@@ -183,7 +183,7 @@ fn test_cpu_contract_both_strided() {
 #[test]
 fn test_cpu_contract_output_permuted() {
     // ij,jk->ki (output is transposed)
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     let a = vec![1.0f64, 2.0, 3.0, 4.0]; // 2x2
     let b = vec![5.0, 6.0, 7.0, 8.0];    // 2x2
@@ -204,7 +204,7 @@ fn test_cpu_contract_output_permuted() {
 #[test]
 fn test_cpu_contract_batched_output_permuted() {
     // bij,bjk->kib (complex permutation)
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     // Simple 2x2x2 tensors for easy manual verification
     // A: batch=2, i=2, j=2
@@ -320,7 +320,7 @@ fn test_cpu_contract_with_argmax_batched() {
 
 #[test]
 fn test_cpu_contract_f32() {
-    let cpu = Cpu::default();
+    let cpu = Cpu;
 
     let a = vec![1.0f32, 2.0, 3.0, 4.0];
     let b = vec![5.0f32, 6.0, 7.0, 8.0];

@@ -237,7 +237,7 @@ fn test_einsum_scalar_output() {
     let b = Tensor::<f64, Cpu>::from_data(&[1.0, 1.0, 1.0, 1.0], &[2, 2]);
 
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1], &[0, 1]], &[]);
-    assert_eq!(c.shape(), &[]);
+    assert_eq!(c.shape(), &[] as &[usize]);
     assert_eq!(c.to_vec(), vec![10.0]); // 1+2+3+4 = 10
 }
 

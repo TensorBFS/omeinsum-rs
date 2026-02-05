@@ -44,15 +44,14 @@ fn test_matrix_multiplication_transposed_output() {
     assert_eq!(c.shape(), &[2, 2]);
     // A (col-major data [1,2,3,4]) = [[1,3],[2,4]]
     // B (col-major data [1,2,3,4]) = [[1,3],[2,4]]
-    // C = A @ B:
-    //   C[0,0] = 1*1 + 3*2 = 7
-    //   C[1,0] = 2*1 + 4*2 = 10
-    //   C[0,1] = 1*3 + 3*4 = 15
-    //   C[1,1] = 2*3 + 4*4 = 22
-    // Then output is transposed to ki format: C^T = [[7,10],[15,22]]
-    // In col-major storage for shape [2,2]: [7, 15, 10, 22]
-    // But the library outputs ik format first then permutes, so result is [7, 10, 15, 22]
-    assert_eq!(c.to_vec(), vec![7.0, 10.0, 15.0, 22.0]);
+    // C = A @ B (in ik format):
+    //   C[i=0,k=0] = 1*1 + 3*2 = 7
+    //   C[i=1,k=0] = 2*1 + 4*2 = 10
+    //   C[i=0,k=1] = 1*3 + 3*4 = 15
+    //   C[i=1,k=1] = 2*3 + 4*4 = 22
+    // Output is ki format (transposed): C^T[k,i] = [[7,10],[15,22]]
+    // In col-major storage (first dim varies fastest): [7, 15, 10, 22]
+    assert_eq!(c.to_vec(), vec![7.0, 15.0, 10.0, 22.0]);
 }
 
 #[test]
@@ -82,7 +81,7 @@ fn test_dot_product() {
     // i,i->: contract over i to get scalar
     let c = einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0], &[0]], &[]);
 
-    assert_eq!(c.shape(), &[]);
+    assert_eq!(c.shape(), &[] as &[usize]);
     // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
     assert_eq!(c.to_vec(), vec![32.0]);
 }
@@ -325,7 +324,7 @@ fn test_tensor_network_contraction() {
     // ij,jk,ki->: full contraction to scalar (trace of product)
     let d = einsum::<Standard<f64>, _, _>(&[&a, &b, &c], &[&[0, 1], &[1, 2], &[2, 0]], &[]);
 
-    assert_eq!(d.shape(), &[]);
+    assert_eq!(d.shape(), &[] as &[usize]);
     // tr(A @ I @ I) = tr(A) = 1 + 4 = 5 (col-major A = [[1,3],[2,4]])
     assert_eq!(d.to_vec(), vec![5.0]);
 }
@@ -585,8 +584,8 @@ fn test_3d_tensor_contraction() {
 #[test]
 fn test_4d_batch_contraction() {
     // Batch of batch matmul: ein"abij,abjk -> abik"
-    let a = Tensor::<f64, Cpu>::from_data(&vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
-    let b = Tensor::<f64, Cpu>::from_data(&vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
+    let a = Tensor::<f64, Cpu>::from_data(&[1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
+    let b = Tensor::<f64, Cpu>::from_data(&[1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
 
     let c =
         einsum::<Standard<f64>, _, _>(&[&a, &b], &[&[0, 1, 2, 3], &[0, 1, 3, 4]], &[0, 1, 2, 4]);

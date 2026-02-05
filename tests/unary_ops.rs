@@ -25,7 +25,7 @@ fn test_unary_trace_2x2() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![5.0]);
 }
 
@@ -42,14 +42,14 @@ fn test_unary_trace_3x3() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![15.0]);
 }
 
 #[test]
 fn test_unary_trace_5x5() {
     // ii -> (trace of 5x5 matrix)
-    let mut data = vec![0.0; 25];
+    let mut data = [0.0; 25];
     for i in 0..5 {
         data[i * 5 + i] = (i + 1) as f64; // Diagonal elements at column-major positions
     }
@@ -65,7 +65,7 @@ fn test_unary_trace_5x5() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![15.0]);
 }
 
@@ -118,7 +118,7 @@ fn test_unary_sum_all_2d() {
     let ein = Einsum::new(vec![vec![0, 1]], vec![], sizes);
     let result = ein.execute::<Standard<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![21.0]);
 }
 
@@ -313,7 +313,7 @@ fn test_unary_tropical_trace() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<MaxPlus<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![4.0]);
 }
 
@@ -328,7 +328,7 @@ fn test_unary_tropical_sum_all() {
     let ein = Einsum::new(vec![vec![0, 1]], vec![], sizes);
     let result = ein.execute::<MaxPlus<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![6.0]);
 }
 
@@ -378,7 +378,7 @@ fn test_unary_minplus_trace() {
     let ein = Einsum::new(vec![vec![0, 0]], vec![], sizes);
     let result = ein.execute::<MinPlus<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![1.0]);
 }
 
@@ -393,7 +393,7 @@ fn test_unary_minplus_sum_all() {
     let ein = Einsum::new(vec![vec![0, 1]], vec![], sizes);
     let result = ein.execute::<MinPlus<f64>, f64, Cpu>(&[&a]);
 
-    assert_eq!(result.shape(), &[]);
+    assert_eq!(result.shape(), &[] as &[usize]);
     assert_eq!(result.to_vec(), vec![1.0]);
 }
 

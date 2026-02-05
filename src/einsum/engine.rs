@@ -16,7 +16,7 @@ use crate::tensor::Tensor;
 ///
 /// ```rust
 /// use omeinsum::{Einsum, Tensor, Cpu};
-/// use omeinsum::algebra::MaxPlus;
+/// use omeinsum::algebra::Standard;
 /// use std::collections::HashMap;
 ///
 /// // A[i,j] × B[j,k] → C[i,k]
@@ -31,7 +31,7 @@ use crate::tensor::Tensor;
 /// );
 ///
 /// ein.optimize_greedy();
-/// let result = ein.execute::<MaxPlus<f32>, f32, Cpu>(&[&a, &b]);
+/// let result = ein.execute::<Standard<f32>, f32, Cpu>(&[&a, &b]);
 /// assert_eq!(result.shape(), &[2, 2]);
 /// ```
 pub struct Einsum<L: Label = usize> {
@@ -98,6 +98,14 @@ impl<L: Label> Einsum<L> {
     /// Get the optimized contraction tree.
     pub fn contraction_tree(&self) -> Option<&NestedEinsum<L>> {
         self.optimized.as_ref()
+    }
+
+    /// Set a pre-computed contraction tree.
+    ///
+    /// This is useful for benchmarking with pre-optimized trees loaded from files.
+    pub fn set_contraction_tree(&mut self, tree: NestedEinsum<L>) -> &mut Self {
+        self.optimized = Some(tree);
+        self
     }
 }
 
@@ -809,7 +817,7 @@ mod tests {
     fn test_linear_to_multi_empty_shape() {
         // Empty shape should return empty multi-index
         let result = linear_to_multi(0, &[]);
-        assert_eq!(result, vec![]);
+        assert_eq!(result, Vec::<usize>::new());
     }
 
     #[test]
@@ -1000,7 +1008,7 @@ mod tests {
         let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // trace = A[0,0] + A[1,1] = 1 + 4 = 5
-        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.shape(), &[] as &[usize]);
         assert_eq!(result.to_vec()[0], 5.0);
     }
 
@@ -1052,7 +1060,7 @@ mod tests {
         let result = execute_unary_naive::<Standard<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // sum all = 1 + 2 + 3 + 4 = 10
-        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.shape(), &[] as &[usize]);
         assert_eq!(result.to_vec()[0], 10.0);
     }
 
@@ -1140,7 +1148,7 @@ mod tests {
         let result = execute_unary_naive::<MaxPlus<f32>, f32, Cpu>(&a, &ix, &iy, &size_dict);
 
         // tropical trace = max(A[0,0], A[1,1]) = max(1, 4) = 4
-        assert_eq!(result.shape(), &[]);
+        assert_eq!(result.shape(), &[] as &[usize]);
         assert_eq!(result.to_vec()[0], 4.0);
     }
 

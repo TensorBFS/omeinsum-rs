@@ -574,7 +574,7 @@ fn test_backward_rectangular_matmul_variants() {
 
     assert_eq!(result.shape(), &[2, 4]);
 
-    let grad_out = Tensor::<f64, Cpu>::from_data(&vec![1.0; 8], &[2, 4]);
+    let grad_out = Tensor::<f64, Cpu>::from_data(&[1.0; 8], &[2, 4]);
     let grads = grad_fn.backward::<Standard<f64>>(&grad_out, &[&a, &b]);
 
     assert_eq!(grads[0].shape(), &[2, 3]);

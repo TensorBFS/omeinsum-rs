@@ -24,6 +24,8 @@ Thumbs.db
 tarpaulin-report.html
 cobertura.xml
 *.profraw
+perf.data
+profile.json.gz
 
 # Documentation
 /docs/book/

@@ -24,7 +24,7 @@ num-complex = { version = "0.4", features = ["bytemuck"] }
 faer = "0.24"
 
 # Contraction order optimization
-omeco = "0.2"
+omeco = "0.2.4"
 
 # Optional: Tropical algebra support (v0.2+ for column-major)
 tropical-gemm = { version = "0.2", optional = true }
